@@ -17,8 +17,9 @@ import {
   Sparkles, 
   CheckCircle2,
   AlertTriangle,
-  Clock,
-  XCircle
+  XCircle,
+  Vote,
+  Layers
 } from 'lucide-react';
 
 interface Candidate {
@@ -31,6 +32,7 @@ interface Election {
   id: string;
   title: string;
   is_active: boolean;
+  created_at: string;
 }
 
 interface VoteLog {
@@ -44,7 +46,12 @@ interface VoteLog {
 export default function AdminDashboard() {
   const [isAdmin, setIsAdmin] = useState(false);
   const [loadingSession, setLoadingSession] = useState(true);
-  const [activeElection, setActiveElection] = useState<Election | null>(null);
+  
+  // All active elections
+  const [electionsList, setElectionsList] = useState<Election[]>([]);
+  const [selectedElectionId, setSelectedElectionId] = useState<string | null>(null);
+
+  // Data for currently selected election
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [voteLogs, setVoteLogs] = useState<VoteLog[]>([]);
   const router = useRouter();
@@ -57,14 +64,14 @@ export default function AdminDashboard() {
   const [formError, setFormError] = useState<string | null>(null);
   const [formSuccess, setFormSuccess] = useState(false);
 
-  // Sorting State for Audit Log
-  const [sortBy, setSortBy] = useState<'name' | 'reg_no'>('name');
+  // 3-way Sorting State for Audit Log: 'name' | 'reg_no' | 'candidate'
+  const [sortBy, setSortBy] = useState<'name' | 'reg_no' | 'candidate'>('name');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
 
   // Cancel vote state
   const [cancellingVoteId, setCancellingVoteId] = useState<string | null>(null);
   
-  // Delete election modal/state
+  // Delete election state
   const [isDeletingElection, setIsDeletingElection] = useState(false);
 
   // Verify Admin Session
@@ -81,118 +88,129 @@ export default function AdminDashboard() {
     checkAdmin();
   }, [router]);
 
-  // Fetch all election data
-  const fetchDashboardData = useCallback(async () => {
+  // Fetch all active elections
+  const fetchElectionsList = useCallback(async () => {
     try {
-      // 1. Fetch active election
-      const { data: electionData, error: electionError } = await supabase
+      const { data, error } = await supabase
         .from('elections')
         .select('*')
         .eq('is_active', true)
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
+        .order('created_at', { ascending: false });
 
-      if (electionError) throw electionError;
+      if (error) throw error;
 
-      if (electionData) {
-        setActiveElection(electionData);
+      const list = data || [];
+      setElectionsList(list);
 
-        // 2. Fetch candidates for active election
-        const { data: candidatesData, error: candidatesError } = await supabase
-          .from('candidates')
-          .select('*')
-          .eq('election_id', electionData.id)
-          .order('name', { ascending: true });
-
-        if (candidatesError) throw candidatesError;
-        setCandidates(candidatesData || []);
-
-        // 3. Fetch votes audit log
-        const { data: votesData, error: votesError } = await supabase
-          .from('votes')
-          .select(`
-            id,
-            voter_name,
-            voter_reg_no,
-            created_at,
-            candidates (
-              name
-            )
-          `)
-          .eq('election_id', electionData.id);
-
-        if (votesError) throw votesError;
-
-        const mappedVotes: VoteLog[] = (votesData || []).map((vote: any) => ({
-          id: vote.id,
-          voter_name: vote.voter_name,
-          voter_reg_no: vote.voter_reg_no,
-          created_at: vote.created_at,
-          candidate_name: vote.candidates?.name || 'Unknown Candidate',
-        }));
-
-        setVoteLogs(mappedVotes);
+      // Auto-select first election if none selected or selected was deleted
+      if (list.length > 0) {
+        setSelectedElectionId((prev) => {
+          if (prev && list.some((e) => e.id === prev)) {
+            return prev;
+          }
+          return list[0].id;
+        });
       } else {
-        setActiveElection(null);
-        setCandidates([]);
-        setVoteLogs([]);
+        setSelectedElectionId(null);
       }
     } catch (err: unknown) {
-      console.error('Error fetching dashboard data:', err);
+      console.error('Error fetching elections list:', err);
     }
   }, []);
 
-  // Initial fetch
+  // Fetch details for currently selected election
+  const fetchSelectedElectionData = useCallback(async (electionId: string) => {
+    try {
+      // 1. Fetch candidates
+      const { data: candidatesData, error: candidatesError } = await supabase
+        .from('candidates')
+        .select('*')
+        .eq('election_id', electionId)
+        .order('name', { ascending: true });
+
+      if (candidatesError) throw candidatesError;
+      setCandidates(candidatesData || []);
+
+      // 2. Fetch votes audit log
+      const { data: votesData, error: votesError } = await supabase
+        .from('votes')
+        .select(`
+          id,
+          voter_name,
+          voter_reg_no,
+          created_at,
+          candidates (
+            name
+          )
+        `)
+        .eq('election_id', electionId);
+
+      if (votesError) throw votesError;
+
+      const mappedVotes: VoteLog[] = (votesData || []).map((vote: any) => ({
+        id: vote.id,
+        voter_name: vote.voter_name,
+        voter_reg_no: vote.voter_reg_no,
+        created_at: vote.created_at,
+        candidate_name: vote.candidates?.name || 'Unknown Candidate',
+      }));
+
+      setVoteLogs(mappedVotes);
+    } catch (err: unknown) {
+      console.error('Error fetching selected election details:', err);
+    }
+  }, []);
+
+  // Initial fetch on admin auth
   useEffect(() => {
     if (isAdmin) {
-      fetchDashboardData();
+      fetchElectionsList();
     }
-  }, [isAdmin, fetchDashboardData]);
+  }, [isAdmin, fetchElectionsList]);
 
-  // Realtime subscriptions
+  // Fetch candidate/vote data whenever selected election changes
   useEffect(() => {
-    if (!isAdmin || !activeElection) return;
+    if (selectedElectionId) {
+      fetchSelectedElectionData(selectedElectionId);
+    } else {
+      setCandidates([]);
+      setVoteLogs([]);
+    }
+  }, [selectedElectionId, fetchSelectedElectionData]);
+
+  // Realtime subscriptions for live election changes & vote entries
+  useEffect(() => {
+    if (!isAdmin) return;
+
+    const electionsChannel = supabase
+      .channel('admin-elections-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'elections' }, () => {
+        fetchElectionsList();
+      })
+      .subscribe();
 
     const candidateChannel = supabase
-      .channel('admin-candidates-changes')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'candidates',
-          filter: `election_id=eq.${activeElection.id}`,
-        },
-        () => {
-          fetchDashboardData();
-        }
-      )
+      .channel('admin-candidates-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'candidates' }, () => {
+        if (selectedElectionId) fetchSelectedElectionData(selectedElectionId);
+      })
       .subscribe();
 
     const votesChannel = supabase
-      .channel('admin-votes-changes')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'votes',
-          filter: `election_id=eq.${activeElection.id}`,
-        },
-        () => {
-          fetchDashboardData();
-        }
-      )
+      .channel('admin-votes-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'votes' }, () => {
+        if (selectedElectionId) fetchSelectedElectionData(selectedElectionId);
+      })
       .subscribe();
 
     return () => {
+      supabase.removeChannel(electionsChannel);
       supabase.removeChannel(candidateChannel);
       supabase.removeChannel(votesChannel);
     };
-  }, [isAdmin, activeElection, fetchDashboardData]);
+  }, [isAdmin, selectedElectionId, fetchElectionsList, fetchSelectedElectionData]);
 
-  // Handle candidate addition to local list
+  // Handle adding candidate to form lineup
   const addCandidateToList = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     const name = candidateNameInput.trim();
@@ -212,7 +230,7 @@ export default function AdminDashboard() {
     setCandidatesList(candidatesList.filter((_, i) => i !== index));
   };
 
-  // Launch new election
+  // Launch new election role
   const handleCreateElection = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError(null);
@@ -232,7 +250,7 @@ export default function AdminDashboard() {
     setIsSubmittingElection(true);
 
     try {
-      const { error } = await supabase.rpc('create_new_election', {
+      const { data: newElectionId, error } = await supabase.rpc('create_new_election', {
         p_title: title,
         p_candidate_names: candidatesList,
       });
@@ -243,7 +261,12 @@ export default function AdminDashboard() {
       setRoleTitle('');
       setCandidatesList([]);
       setFormError(null);
-      fetchDashboardData();
+      
+      // Refresh list and select newly created election
+      await fetchElectionsList();
+      if (newElectionId) {
+        setSelectedElectionId(newElectionId);
+      }
     } catch (err: any) {
       console.error('Error creating election:', err);
       setFormError(err.message || 'Failed to create election. Please try again.');
@@ -252,9 +275,9 @@ export default function AdminDashboard() {
     }
   };
 
-  // Cancel / Delete a individual vote record
+  // Cancel / Delete an individual vote record
   const handleCancelVote = async (voteId: string, voterRegNo: string) => {
-    if (!confirm(`Are you sure you want to cancel the vote cast by Register Number ${voterRegNo}? This voter will be allowed to re-vote.`)) {
+    if (!confirm(`Are you sure you want to cancel the vote cast by Register Number ${voterRegNo}? This voter will be unlocked to vote again.`)) {
       return;
     }
 
@@ -266,7 +289,7 @@ export default function AdminDashboard() {
         .eq('id', voteId);
 
       if (error) throw error;
-      fetchDashboardData();
+      if (selectedElectionId) fetchSelectedElectionData(selectedElectionId);
     } catch (err: any) {
       console.error('Error cancelling vote:', err);
       alert('Failed to cancel vote: ' + err.message);
@@ -277,8 +300,11 @@ export default function AdminDashboard() {
 
   // Delete active election
   const handleDeleteElection = async () => {
-    if (!activeElection) return;
-    if (!confirm(`Are you sure you want to completely DELETE the active election "${activeElection.title}"? All candidate data and votes will be deleted permanently.`)) {
+    if (!selectedElectionId) return;
+    const currentElection = electionsList.find((e) => e.id === selectedElectionId);
+    const title = currentElection?.title || 'Selected';
+
+    if (!confirm(`Are you sure you want to completely DELETE the election role "${title}"? All candidates and votes cast for this role will be permanently deleted.`)) {
       return;
     }
 
@@ -287,13 +313,11 @@ export default function AdminDashboard() {
       const { error } = await supabase
         .from('elections')
         .delete()
-        .eq('id', activeElection.id);
+        .eq('id', selectedElectionId);
 
       if (error) throw error;
-      setActiveElection(null);
-      setCandidates([]);
-      setVoteLogs([]);
-      fetchDashboardData();
+      setSelectedElectionId(null);
+      await fetchElectionsList();
     } catch (err: any) {
       console.error('Error deleting election:', err);
       alert('Failed to delete election: ' + err.message);
@@ -307,7 +331,8 @@ export default function AdminDashboard() {
     router.push('/admin/login');
   };
 
-  const handleSortToggle = (field: 'name' | 'reg_no') => {
+  // 3-way Sorting Toggles
+  const handleSortToggle = (field: 'name' | 'reg_no' | 'candidate') => {
     if (sortBy === field) {
       setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
     } else {
@@ -324,6 +349,9 @@ export default function AdminDashboard() {
       if (sortBy === 'name') {
         valA = a.voter_name.toLowerCase();
         valB = b.voter_name.toLowerCase();
+      } else if (sortBy === 'candidate') {
+        valA = a.candidate_name.toLowerCase();
+        valB = b.candidate_name.toLowerCase();
       } else {
         const regA = parseInt(a.voter_reg_no, 10);
         const regB = parseInt(b.voter_reg_no, 10);
@@ -342,6 +370,7 @@ export default function AdminDashboard() {
     });
   };
 
+  const currentSelectedElection = electionsList.find((e) => e.id === selectedElectionId);
   const totalVotes = candidates.reduce((acc, curr) => acc + curr.votes_count, 0);
   const remainingVoters = Math.max(0, TOTAL_ELIGIBLE_VOTERS - totalVotes);
 
@@ -373,7 +402,7 @@ export default function AdminDashboard() {
                 <span className="text-xs px-2 py-0.5 bg-indigo-500/10 border border-indigo-500/30 text-indigo-400 font-medium rounded">Admin Panel</span>
                 <span className="text-xs text-slate-500">SRM Valliammai Engineering College</span>
               </div>
-              <h1 className="text-lg font-bold text-white">Symposium Voting Console</h1>
+              <h1 className="text-lg font-bold text-white">Multi-Role Symposium Voting Console</h1>
             </div>
           </div>
 
@@ -389,11 +418,12 @@ export default function AdminDashboard() {
       {/* Main Content */}
       <main className="flex-grow max-w-7xl w-full mx-auto px-6 py-10 space-y-10">
         <div className="grid lg:grid-cols-12 gap-8">
+          
           {/* Create Election Form */}
           <section className="lg:col-span-5 bg-slate-900/40 border border-slate-900 rounded-2xl p-6 backdrop-blur-sm space-y-6">
             <div className="flex items-center gap-2 border-b border-slate-800/60 pb-4">
               <Plus className="w-5 h-5 text-indigo-400" />
-              <h2 className="text-lg font-bold text-white">Create New Election</h2>
+              <h2 className="text-lg font-bold text-white">Create New Role Election</h2>
             </div>
 
             {formError && (
@@ -406,21 +436,21 @@ export default function AdminDashboard() {
             {formSuccess && (
               <div className="p-4 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-sm rounded-xl flex items-start gap-2">
                 <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
-                <span>Election successfully created and is now live!</span>
+                <span>Election role launched successfully and is now live!</span>
               </div>
             )}
 
             <form onSubmit={handleCreateElection} className="space-y-6">
               <div className="space-y-2">
                 <label className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-                  Title of the Role
+                  Title of the Role / Post
                 </label>
                 <input
                   type="text"
                   required
                   value={roleTitle}
                   onChange={(e) => setRoleTitle(e.target.value)}
-                  placeholder="e.g. Student President"
+                  placeholder="e.g. President, Vice President, Treasurer"
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-white placeholder-slate-700 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all text-sm"
                 />
               </div>
@@ -480,43 +510,64 @@ export default function AdminDashboard() {
               >
                 {isSubmittingElection ? (
                   <>
-                    <Loader2 className="w-4 h-4 animate-spin" /> Launching...
+                    <Loader2 className="w-4 h-4 animate-spin" /> Launching Role...
                   </>
                 ) : (
                   <>
-                    <Sparkles className="w-4 h-4" /> Launch Live Poll
+                    <Sparkles className="w-4 h-4" /> Add & Launch Role Election
                   </>
                 )}
               </button>
             </form>
           </section>
 
-          {/* Real-time Analytics Section */}
+          {/* Real-time Analytics Section & Election Selector */}
           <section className="lg:col-span-7 bg-slate-900/40 border border-slate-900 rounded-2xl p-6 backdrop-blur-sm space-y-6">
-            <div className="flex items-center justify-between border-b border-slate-800/60 pb-4">
+            
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-800/60 pb-4 gap-4">
               <div className="flex items-center gap-2">
                 <BarChart3 className="w-5 h-5 text-emerald-400" />
-                <h2 className="text-lg font-bold text-white">Live Analytics</h2>
+                <h2 className="text-lg font-bold text-white">Live Role Analytics</h2>
               </div>
-              {activeElection && (
-                <div className="flex items-center gap-3">
-                  <span className="flex items-center gap-1.5 text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-0.5 rounded-full font-semibold animate-pulse">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" /> Live
-                  </span>
-                  <button
-                    onClick={handleDeleteElection}
-                    disabled={isDeletingElection}
-                    className="flex items-center gap-1 text-xs text-red-400 hover:text-white bg-red-500/10 hover:bg-red-600 border border-red-500/30 px-3 py-1 rounded-lg font-medium transition-all"
-                  >
-                    {isDeletingElection ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
-                    Delete Election
-                  </button>
-                </div>
+
+              {selectedElectionId && (
+                <button
+                  onClick={handleDeleteElection}
+                  disabled={isDeletingElection}
+                  className="flex items-center gap-1.5 text-xs text-red-400 hover:text-white bg-red-500/10 hover:bg-red-600 border border-red-500/30 px-3 py-1.5 rounded-lg font-medium transition-all self-start sm:self-auto"
+                >
+                  {isDeletingElection ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                  Delete Selected Role
+                </button>
               )}
             </div>
 
-            {activeElection ? (
-              <div className="space-y-6">
+            {/* Active Election Selection Tabs */}
+            {electionsList.length > 0 ? (
+              <div className="space-y-4">
+                <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-none">
+                  <span className="text-xs text-slate-500 font-semibold uppercase shrink-0 flex items-center gap-1">
+                    <Layers className="w-3.5 h-3.5" /> Roles:
+                  </span>
+                  {electionsList.map((election) => {
+                    const isSelected = election.id === selectedElectionId;
+                    return (
+                      <button
+                        key={election.id}
+                        onClick={() => setSelectedElectionId(election.id)}
+                        className={`px-3.5 py-2 rounded-xl text-xs font-semibold shrink-0 transition-all flex items-center gap-2 ${
+                          isSelected
+                            ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20'
+                            : 'bg-slate-950 border border-slate-800 text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        <Vote className="w-3.5 h-3.5" />
+                        {election.title}
+                      </button>
+                    );
+                  })}
+                </div>
+
                 {/* Turnout Stats Cards (Total, Voted, Remaining) */}
                 <div className="grid grid-cols-3 gap-3">
                   <div className="bg-slate-950/80 border border-slate-900 p-4 rounded-xl text-center">
@@ -526,7 +577,7 @@ export default function AdminDashboard() {
                     </span>
                   </div>
                   <div className="bg-slate-950/80 border border-slate-900 p-4 rounded-xl text-center">
-                    <span className="text-[10px] text-slate-500 font-semibold uppercase block">Votes Cast</span>
+                    <span className="text-[10px] text-slate-500 font-semibold uppercase block">Votes for {currentSelectedElection?.title}</span>
                     <span className="text-xl md:text-2xl font-bold text-emerald-400 mt-1 block">
                       {totalVotes}
                     </span>
@@ -541,7 +592,14 @@ export default function AdminDashboard() {
 
                 {/* Candidate Vote counts with progress bar */}
                 <div className="space-y-4 pt-2">
-                  <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Candidate Performance</h3>
+                  <div className="flex justify-between items-center">
+                    <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                      Candidates Standing for "{currentSelectedElection?.title}"
+                    </h3>
+                    <span className="text-[10px] text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded font-semibold animate-pulse">
+                      Live
+                    </span>
+                  </div>
                   <div className="space-y-4 max-h-[300px] overflow-y-auto pr-1">
                     {candidates.map((cand) => {
                       const percentage = totalVotes > 0 ? Math.round((cand.votes_count / totalVotes) * 100) : 0;
@@ -568,52 +626,67 @@ export default function AdminDashboard() {
             ) : (
               <div className="flex flex-col items-center justify-center py-16 text-center space-y-3">
                 <BarChart3 className="w-12 h-12 text-slate-700" />
-                <h3 className="text-slate-400 font-semibold">No Active Election</h3>
-                <p className="text-xs text-slate-600 max-w-sm">Use the form on the left to configure and launch an election. Live vote details will appear here immediately.</p>
+                <h3 className="text-slate-400 font-semibold">No Active Role Elections</h3>
+                <p className="text-xs text-slate-600 max-w-sm">
+                  Use the form on the left to add your first role election. You can create multiple concurrent elections.
+                </p>
               </div>
             )}
           </section>
         </div>
 
-        {/* Exclusive Voter Audit Log Section with Cancel Vote Option */}
+        {/* Exclusive Voter Audit Log Section with 3-Way Sorting */}
         <section className="bg-slate-900/40 border border-slate-900 rounded-2xl p-6 backdrop-blur-sm space-y-6">
           <div className="flex flex-col md:flex-row md:items-center justify-between border-b border-slate-800/60 pb-4 gap-4">
             <div className="flex items-center gap-2">
               <ClipboardList className="w-5 h-5 text-indigo-400" />
               <div>
                 <h2 className="text-lg font-bold text-white">Exclusive Voter Audit Log</h2>
-                <p className="text-xs text-slate-500">Secure log visible only to the administrator. Cancel votes to allow re-voting.</p>
+                <p className="text-xs text-slate-500">
+                  Showing audit records for role: <span className="text-indigo-400 font-semibold">{currentSelectedElection?.title || 'None Selected'}</span>
+                </p>
               </div>
             </div>
 
-            <div className="flex items-center gap-3">
+            {/* 3-Way Sorting Toggles: Voter Name, Reg No, Voted Candidate */}
+            <div className="flex flex-wrap items-center gap-2">
               <span className="text-xs text-slate-400 font-semibold uppercase">Sort By:</span>
               <div className="inline-flex rounded-lg border border-slate-800 p-0.5 bg-slate-950">
                 <button
                   onClick={() => handleSortToggle('name')}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${
+                  className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold transition-all ${
                     sortBy === 'name' 
                       ? 'bg-indigo-600 text-white shadow-sm' 
                       : 'text-slate-400 hover:text-white'
                   }`}
                 >
-                  Voter Name <ArrowUpDown className="w-3.5 h-3.5" />
+                  Voter Name <ArrowUpDown className="w-3 h-3" />
                 </button>
                 <button
                   onClick={() => handleSortToggle('reg_no')}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${
+                  className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold transition-all ${
                     sortBy === 'reg_no' 
                       ? 'bg-indigo-600 text-white shadow-sm' 
                       : 'text-slate-400 hover:text-white'
                   }`}
                 >
-                  Reg Number <ArrowUpDown className="w-3.5 h-3.5" />
+                  Reg Number <ArrowUpDown className="w-3 h-3" />
+                </button>
+                <button
+                  onClick={() => handleSortToggle('candidate')}
+                  className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold transition-all ${
+                    sortBy === 'candidate' 
+                      ? 'bg-indigo-600 text-white shadow-sm' 
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  Candidate Choice <ArrowUpDown className="w-3 h-3" />
                 </button>
               </div>
             </div>
           </div>
 
-          {activeElection ? (
+          {selectedElectionId ? (
             voteLogs.length > 0 ? (
               <div className="overflow-x-auto border border-slate-900 rounded-xl">
                 <table className="w-full text-left border-collapse">
@@ -621,7 +694,7 @@ export default function AdminDashboard() {
                     <tr className="bg-slate-950 text-slate-400 text-xs font-semibold uppercase border-b border-slate-900">
                       <th className="py-4 px-6">Voter Name</th>
                       <th className="py-4 px-6">Register Number</th>
-                      <th className="py-4 px-6">Selection</th>
+                      <th className="py-4 px-6">Candidate Choice</th>
                       <th className="py-4 px-6">Timestamp</th>
                       <th className="py-4 px-6 text-right">Action</th>
                     </tr>
@@ -661,15 +734,15 @@ export default function AdminDashboard() {
             ) : (
               <div className="text-center py-12 text-slate-500 border border-dashed border-slate-900 rounded-xl bg-slate-950/20">
                 <Users className="w-8 h-8 text-slate-700 mx-auto mb-2" />
-                <p className="text-sm font-semibold">No Votes Logged Yet</p>
-                <p className="text-xs text-slate-600 mt-1">Waiting for eligible voters to register and submit their choices.</p>
+                <p className="text-sm font-semibold">No Votes Logged for this Role Yet</p>
+                <p className="text-xs text-slate-600 mt-1">Waiting for eligible voters to submit their choices for "{currentSelectedElection?.title}".</p>
               </div>
             )
           ) : (
             <div className="text-center py-12 text-slate-500 border border-dashed border-slate-900 rounded-xl bg-slate-950/20">
               <ClipboardList className="w-8 h-8 text-slate-700 mx-auto mb-2" />
-              <p className="text-sm font-semibold">Audit Log Offline</p>
-              <p className="text-xs text-slate-600 mt-1">Audit information will be displayed when an active election is running.</p>
+              <p className="text-sm font-semibold">No Role Selected</p>
+              <p className="text-xs text-slate-600 mt-1">Select an active election role above to view its audit log.</p>
             </div>
           )}
         </section>
@@ -677,7 +750,7 @@ export default function AdminDashboard() {
 
       {/* Footer */}
       <footer className="py-6 text-center text-xs text-slate-600 z-10 border-t border-slate-900/60 bg-slate-950">
-        <p>© 2026 SRM Valliammai Engineering College. AI & DS Symposium Voting System</p>
+        <p>© 2026 SRM Valliammai Engineering College. AI & DS Symposium Multi-Role Voting System</p>
       </footer>
     </div>
   );
