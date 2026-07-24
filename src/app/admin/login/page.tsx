@@ -30,9 +30,16 @@ export default function AdminLogin() {
     setIsLoading(true);
     setErrorMsg(null);
 
+    const targetEmail = email.trim().toLowerCase();
+    if (targetEmail !== 'kaamesh712006@gmail.com') {
+      setErrorMsg('Access Denied: This email is not authorized as an administrator.');
+      setIsLoading(false);
+      return;
+    }
+
     try {
       const { error } = await supabase.auth.signInWithPassword({
-        email,
+        email: targetEmail,
         password,
       });
 
