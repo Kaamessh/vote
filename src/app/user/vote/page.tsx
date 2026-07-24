@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
+import { TOTAL_ELIGIBLE_VOTERS } from '@/lib/validation';
 import { 
   Vote, 
   User, 
@@ -12,7 +13,10 @@ import {
   Cpu, 
   AlertTriangle,
   LogOut,
-  Flame
+  Flame,
+  Users,
+  Clock,
+  Award
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -47,7 +51,6 @@ export default function UserVoteArena() {
       const storedElectionId = sessionStorage.getItem('active_election_id');
 
       if (!storedName || !storedRegNo || !storedStatus || !storedElectionId) {
-        // Not logged in or missing session
         router.replace('/user/login');
         return;
       }
@@ -57,7 +60,7 @@ export default function UserVoteArena() {
       setActiveElectionId(storedElectionId);
 
       try {
-        // Double check against database to ensure they haven't already voted (bypass sessionStorage manipulation)
+        // Double check against database using normalized reg number
         const { data: hasVoted, error: checkError } = await supabase.rpc('check_has_voted', {
           p_reg_no: storedRegNo,
           p_election_id: storedElectionId,
@@ -109,7 +112,7 @@ export default function UserVoteArena() {
     verifyVoterSession();
   }, [router]);
 
-  // Set up Realtime listener for live vote count updates
+  // Realtime listener for candidate vote changes
   useEffect(() => {
     if (!activeElectionId) return;
 
@@ -123,8 +126,7 @@ export default function UserVoteArena() {
           table: 'candidates',
           filter: `election_id=eq.${activeElectionId}`,
         },
-        (payload) => {
-          // Refetch candidates to ensure everything is sync'd perfectly
+        () => {
           const refetchCandidates = async () => {
             const { data } = await supabase
               .from('candidates')
@@ -165,7 +167,6 @@ export default function UserVoteArena() {
         });
 
       if (error) {
-        // If unique constraint violated, it will fail
         if (error.code === '23505') {
           throw new Error('Our security system detected you have already voted in this election.');
         }
@@ -180,7 +181,6 @@ export default function UserVoteArena() {
       console.error('Error submitting vote:', err);
       setErrorMsg(err.message || 'Failed to submit vote. Please try again.');
       
-      // If they already voted, redirect them back to login which triggers the "already voted" UI
       if (err.message?.includes('already voted')) {
         setTimeout(() => {
           router.replace('/user/login');
@@ -195,6 +195,9 @@ export default function UserVoteArena() {
     sessionStorage.clear();
     router.push('/');
   };
+
+  const totalVotesCast = candidates.reduce((acc, curr) => acc + curr.votes_count, 0);
+  const remainingVoters = Math.max(0, TOTAL_ELIGIBLE_VOTERS - totalVotesCast);
 
   if (checkingEligibility) {
     return (
@@ -256,8 +259,6 @@ export default function UserVoteArena() {
     );
   }
 
-  const totalVotes = candidates.reduce((acc, curr) => acc + curr.votes_count, 0);
-
   return (
     <div className="relative min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-between overflow-x-hidden">
       {/* Background glow */}
@@ -301,7 +302,7 @@ export default function UserVoteArena() {
       </header>
 
       {/* Main voting card */}
-      <main className="flex-grow max-w-4xl w-full mx-auto px-6 py-12 flex flex-col justify-center space-y-8">
+      <main className="flex-grow max-w-4xl w-full mx-auto px-6 py-10 flex flex-col justify-center space-y-8">
         
         {errorMsg && (
           <div className="p-4 bg-red-500/10 border border-red-500/30 text-red-400 text-sm rounded-xl flex items-start gap-2 max-w-2xl mx-auto w-full">
@@ -321,15 +322,45 @@ export default function UserVoteArena() {
                 Cast Vote: {electionTitle}
               </h1>
               <p className="text-slate-400 text-sm md:text-base max-w-xl mx-auto">
-                Review the candidates below. The graph and counts display votes updating in real-time as your peers cast their ballots. Select your choice and submit.
+                Review the candidates below. Live vote counts update in real-time. Select your choice and submit.
               </p>
             </div>
 
+            {/* Voter Turnout Summary Banner */}
+            <div className="grid grid-cols-3 gap-4 max-w-2xl mx-auto bg-slate-900/60 border border-slate-800 rounded-2xl p-4 text-center backdrop-blur-sm">
+              <div className="space-y-1">
+                <span className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider block flex items-center justify-center gap-1">
+                  <Users className="w-3 h-3 text-indigo-400" /> Total Voters
+                </span>
+                <span className="text-xl md:text-2xl font-bold text-white block">
+                  {TOTAL_ELIGIBLE_VOTERS}
+                </span>
+              </div>
+
+              <div className="space-y-1 border-x border-slate-800">
+                <span className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider block flex items-center justify-center gap-1">
+                  <Award className="w-3 h-3 text-emerald-400" /> Votes Cast
+                </span>
+                <span className="text-xl md:text-2xl font-bold text-emerald-400 block">
+                  {totalVotesCast}
+                </span>
+              </div>
+
+              <div className="space-y-1">
+                <span className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider block flex items-center justify-center gap-1">
+                  <Clock className="w-3 h-3 text-amber-400" /> Remaining
+                </span>
+                <span className="text-xl md:text-2xl font-bold text-amber-400 block">
+                  {remainingVoters}
+                </span>
+              </div>
+            </div>
+
             {/* Candidates Selection Grid */}
-            <div className="grid md:grid-cols-2 gap-6 max-w-3xl mx-auto pt-4">
+            <div className="grid md:grid-cols-2 gap-6 max-w-3xl mx-auto pt-2">
               {candidates.map((cand) => {
                 const isSelected = selectedCandidateId === cand.id;
-                const percentage = totalVotes > 0 ? Math.round((cand.votes_count / totalVotes) * 100) : 0;
+                const percentage = totalVotesCast > 0 ? Math.round((cand.votes_count / totalVotesCast) * 100) : 0;
                 
                 return (
                   <button
@@ -379,7 +410,7 @@ export default function UserVoteArena() {
             </div>
 
             {/* Voting Submission actions */}
-            <div className="max-w-md mx-auto pt-6 text-center space-y-4">
+            <div className="max-w-md mx-auto pt-4 text-center space-y-4">
               <button
                 onClick={handleCastVote}
                 disabled={!selectedCandidateId || isSubmittingVote}
@@ -396,7 +427,7 @@ export default function UserVoteArena() {
                 )}
               </button>
               <p className="text-[10px] text-slate-600 leading-normal">
-                By submitting this ballot, you confirm that you are the rightful owner of Register Number <span className="font-mono">{voterRegNo}</span>. Your vote is secure, and you will not be allowed to change it or vote again.
+                By submitting this ballot, you confirm that you are the rightful owner of Register Number <span className="font-mono">{voterRegNo}</span>. Your vote is secure, and you will not be allowed to change it or vote again unless reset by the administrator.
               </p>
             </div>
           </div>

@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
+import { TOTAL_ELIGIBLE_VOTERS } from '@/lib/validation';
 import { 
   Shield, 
   LogOut, 
@@ -15,7 +16,9 @@ import {
   Loader2, 
   Sparkles, 
   CheckCircle2,
-  AlertTriangle
+  AlertTriangle,
+  Clock,
+  XCircle
 } from 'lucide-react';
 
 interface Candidate {
@@ -57,6 +60,12 @@ export default function AdminDashboard() {
   // Sorting State for Audit Log
   const [sortBy, setSortBy] = useState<'name' | 'reg_no'>('name');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
+
+  // Cancel vote state
+  const [cancellingVoteId, setCancellingVoteId] = useState<string | null>(null);
+  
+  // Delete election modal/state
+  const [isDeletingElection, setIsDeletingElection] = useState(false);
 
   // Verify Admin Session
   useEffect(() => {
@@ -115,7 +124,6 @@ export default function AdminDashboard() {
 
         if (votesError) throw votesError;
 
-        // Map candidate name from joined relation
         const mappedVotes: VoteLog[] = (votesData || []).map((vote: any) => ({
           id: vote.id,
           voter_name: vote.voter_name,
@@ -135,18 +143,17 @@ export default function AdminDashboard() {
     }
   }, []);
 
-  // Fetch initial data
+  // Initial fetch
   useEffect(() => {
     if (isAdmin) {
       fetchDashboardData();
     }
   }, [isAdmin, fetchDashboardData]);
 
-  // Set up Realtime subscriptions
+  // Realtime subscriptions
   useEffect(() => {
     if (!isAdmin || !activeElection) return;
 
-    // Subscribe to candidates update for live count
     const candidateChannel = supabase
       .channel('admin-candidates-changes')
       .on(
@@ -163,13 +170,12 @@ export default function AdminDashboard() {
       )
       .subscribe();
 
-    // Subscribe to votes insert for audit log
     const votesChannel = supabase
       .channel('admin-votes-changes')
       .on(
         'postgres_changes',
         {
-          event: 'INSERT',
+          event: '*',
           schema: 'public',
           table: 'votes',
           filter: `election_id=eq.${activeElection.id}`,
@@ -186,7 +192,7 @@ export default function AdminDashboard() {
     };
   }, [isAdmin, activeElection, fetchDashboardData]);
 
-  // Handle adding candidate to list in form
+  // Handle candidate addition to local list
   const addCandidateToList = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     const name = candidateNameInput.trim();
@@ -202,12 +208,11 @@ export default function AdminDashboard() {
     setFormError(null);
   };
 
-  // Remove candidate from list in form
   const removeCandidateFromList = (index: number) => {
     setCandidatesList(candidatesList.filter((_, i) => i !== index));
   };
 
-  // Submit and create new election
+  // Launch new election
   const handleCreateElection = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError(null);
@@ -227,22 +232,17 @@ export default function AdminDashboard() {
     setIsSubmittingElection(true);
 
     try {
-      // Call create_new_election RPC function
-      const { data: newElectionId, error } = await supabase.rpc('create_new_election', {
+      const { error } = await supabase.rpc('create_new_election', {
         p_title: title,
         p_candidate_names: candidatesList,
       });
 
-      if (error) {
-        throw error;
-      }
+      if (error) throw error;
 
       setFormSuccess(true);
       setRoleTitle('');
       setCandidatesList([]);
       setFormError(null);
-      
-      // Fetch new election data
       fetchDashboardData();
     } catch (err: any) {
       console.error('Error creating election:', err);
@@ -252,13 +252,61 @@ export default function AdminDashboard() {
     }
   };
 
-  // Sign out admin
+  // Cancel / Delete a individual vote record
+  const handleCancelVote = async (voteId: string, voterRegNo: string) => {
+    if (!confirm(`Are you sure you want to cancel the vote cast by Register Number ${voterRegNo}? This voter will be allowed to re-vote.`)) {
+      return;
+    }
+
+    setCancellingVoteId(voteId);
+    try {
+      const { error } = await supabase
+        .from('votes')
+        .delete()
+        .eq('id', voteId);
+
+      if (error) throw error;
+      fetchDashboardData();
+    } catch (err: any) {
+      console.error('Error cancelling vote:', err);
+      alert('Failed to cancel vote: ' + err.message);
+    } finally {
+      setCancellingVoteId(null);
+    }
+  };
+
+  // Delete active election
+  const handleDeleteElection = async () => {
+    if (!activeElection) return;
+    if (!confirm(`Are you sure you want to completely DELETE the active election "${activeElection.title}"? All candidate data and votes will be deleted permanently.`)) {
+      return;
+    }
+
+    setIsDeletingElection(true);
+    try {
+      const { error } = await supabase
+        .from('elections')
+        .delete()
+        .eq('id', activeElection.id);
+
+      if (error) throw error;
+      setActiveElection(null);
+      setCandidates([]);
+      setVoteLogs([]);
+      fetchDashboardData();
+    } catch (err: any) {
+      console.error('Error deleting election:', err);
+      alert('Failed to delete election: ' + err.message);
+    } finally {
+      setIsDeletingElection(false);
+    }
+  };
+
   const handleSignOut = async () => {
     await supabase.auth.signOut();
     router.push('/admin/login');
   };
 
-  // Sort and filter audit log
   const handleSortToggle = (field: 'name' | 'reg_no') => {
     if (sortBy === field) {
       setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
@@ -277,7 +325,6 @@ export default function AdminDashboard() {
         valA = a.voter_name.toLowerCase();
         valB = b.voter_name.toLowerCase();
       } else {
-        // Sort numerically if possible, otherwise string sort
         const regA = parseInt(a.voter_reg_no, 10);
         const regB = parseInt(b.voter_reg_no, 10);
 
@@ -296,6 +343,7 @@ export default function AdminDashboard() {
   };
 
   const totalVotes = candidates.reduce((acc, curr) => acc + curr.votes_count, 0);
+  const remainingVoters = Math.max(0, TOTAL_ELIGIBLE_VOTERS - totalVotes);
 
   if (loadingSession) {
     return (
@@ -310,7 +358,7 @@ export default function AdminDashboard() {
 
   return (
     <div className="relative min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-between overflow-x-hidden">
-      {/* Dynamic Background */}
+      {/* Background */}
       <div className="absolute top-0 left-0 w-full h-full bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-900/40 via-slate-950 to-slate-950 -z-10" />
 
       {/* Header */}
@@ -328,6 +376,7 @@ export default function AdminDashboard() {
               <h1 className="text-lg font-bold text-white">Symposium Voting Console</h1>
             </div>
           </div>
+
           <button
             onClick={handleSignOut}
             className="flex items-center gap-2 px-4 py-2 bg-slate-900 border border-slate-800 hover:bg-slate-800 hover:border-red-500/30 hover:text-red-400 rounded-xl text-sm font-semibold transition-all duration-300"
@@ -337,10 +386,10 @@ export default function AdminDashboard() {
         </div>
       </header>
 
-      {/* Main Workspace */}
+      {/* Main Content */}
       <main className="flex-grow max-w-7xl w-full mx-auto px-6 py-10 space-y-10">
         <div className="grid lg:grid-cols-12 gap-8">
-          {/* Create Election Section */}
+          {/* Create Election Form */}
           <section className="lg:col-span-5 bg-slate-900/40 border border-slate-900 rounded-2xl p-6 backdrop-blur-sm space-y-6">
             <div className="flex items-center gap-2 border-b border-slate-800/60 pb-4">
               <Plus className="w-5 h-5 text-indigo-400" />
@@ -362,7 +411,6 @@ export default function AdminDashboard() {
             )}
 
             <form onSubmit={handleCreateElection} className="space-y-6">
-              {/* Election Title */}
               <div className="space-y-2">
                 <label className="text-xs font-semibold uppercase tracking-wider text-slate-400">
                   Title of the Role
@@ -377,7 +425,6 @@ export default function AdminDashboard() {
                 />
               </div>
 
-              {/* Candidates Add Form */}
               <div className="space-y-3">
                 <label className="text-xs font-semibold uppercase tracking-wider text-slate-400">
                   Add Candidates
@@ -406,7 +453,6 @@ export default function AdminDashboard() {
                 </div>
               </div>
 
-              {/* Added Candidates List */}
               {candidatesList.length > 0 && (
                 <div className="space-y-2">
                   <span className="text-xs font-semibold text-slate-400 block">Candidate Lineup ({candidatesList.length})</span>
@@ -427,7 +473,6 @@ export default function AdminDashboard() {
                 </div>
               )}
 
-              {/* Submit Button */}
               <button
                 type="submit"
                 disabled={isSubmittingElection || candidatesList.length < 2}
@@ -454,36 +499,47 @@ export default function AdminDashboard() {
                 <h2 className="text-lg font-bold text-white">Live Analytics</h2>
               </div>
               {activeElection && (
-                <span className="flex items-center gap-1.5 text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-0.5 rounded-full font-semibold animate-pulse">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" /> Live
-                </span>
+                <div className="flex items-center gap-3">
+                  <span className="flex items-center gap-1.5 text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-0.5 rounded-full font-semibold animate-pulse">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" /> Live
+                  </span>
+                  <button
+                    onClick={handleDeleteElection}
+                    disabled={isDeletingElection}
+                    className="flex items-center gap-1 text-xs text-red-400 hover:text-white bg-red-500/10 hover:bg-red-600 border border-red-500/30 px-3 py-1 rounded-lg font-medium transition-all"
+                  >
+                    {isDeletingElection ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                    Delete Election
+                  </button>
+                </div>
               )}
             </div>
 
             {activeElection ? (
               <div className="space-y-6">
-                {/* Stats Summary cards */}
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="bg-slate-950/80 border border-slate-900 p-4 rounded-xl">
-                    <span className="text-xs text-slate-500 font-semibold block uppercase">Active Election</span>
-                    <span className="text-base md:text-lg font-bold text-white mt-1 block truncate">
-                      {activeElection.title}
+                {/* Turnout Stats Cards (Total, Voted, Remaining) */}
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="bg-slate-950/80 border border-slate-900 p-4 rounded-xl text-center">
+                    <span className="text-[10px] text-slate-500 font-semibold uppercase block">Total Voters</span>
+                    <span className="text-xl md:text-2xl font-bold text-white mt-1 block">
+                      {TOTAL_ELIGIBLE_VOTERS}
                     </span>
                   </div>
-                  <div className="bg-slate-950/80 border border-slate-900 p-4 rounded-xl flex items-center justify-between">
-                    <div>
-                      <span className="text-xs text-slate-500 font-semibold block uppercase">Total Votes Cast</span>
-                      <span className="text-2xl md:text-3xl font-extrabold text-white mt-1 block">
-                        {totalVotes}
-                      </span>
-                    </div>
-                    <div className="bg-emerald-500/10 p-3 rounded-lg text-emerald-400">
-                      <Users className="w-6 h-6" />
-                    </div>
+                  <div className="bg-slate-950/80 border border-slate-900 p-4 rounded-xl text-center">
+                    <span className="text-[10px] text-slate-500 font-semibold uppercase block">Votes Cast</span>
+                    <span className="text-xl md:text-2xl font-bold text-emerald-400 mt-1 block">
+                      {totalVotes}
+                    </span>
+                  </div>
+                  <div className="bg-slate-950/80 border border-slate-900 p-4 rounded-xl text-center">
+                    <span className="text-[10px] text-slate-500 font-semibold uppercase block">Remaining</span>
+                    <span className="text-xl md:text-2xl font-bold text-amber-400 mt-1 block">
+                      {remainingVoters}
+                    </span>
                   </div>
                 </div>
 
-                {/* Candidate Vote counts with percentages */}
+                {/* Candidate Vote counts with progress bar */}
                 <div className="space-y-4 pt-2">
                   <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Candidate Performance</h3>
                   <div className="space-y-4 max-h-[300px] overflow-y-auto pr-1">
@@ -519,17 +575,17 @@ export default function AdminDashboard() {
           </section>
         </div>
 
-        {/* Exclusive Voter Audit Log Section */}
+        {/* Exclusive Voter Audit Log Section with Cancel Vote Option */}
         <section className="bg-slate-900/40 border border-slate-900 rounded-2xl p-6 backdrop-blur-sm space-y-6">
           <div className="flex flex-col md:flex-row md:items-center justify-between border-b border-slate-800/60 pb-4 gap-4">
             <div className="flex items-center gap-2">
               <ClipboardList className="w-5 h-5 text-indigo-400" />
               <div>
                 <h2 className="text-lg font-bold text-white">Exclusive Voter Audit Log</h2>
-                <p className="text-xs text-slate-500">Secure log visible only to the administrator</p>
+                <p className="text-xs text-slate-500">Secure log visible only to the administrator. Cancel votes to allow re-voting.</p>
               </div>
             </div>
-            {/* Sorting Toggles */}
+
             <div className="flex items-center gap-3">
               <span className="text-xs text-slate-400 font-semibold uppercase">Sort By:</span>
               <div className="inline-flex rounded-lg border border-slate-800 p-0.5 bg-slate-950">
@@ -567,6 +623,7 @@ export default function AdminDashboard() {
                       <th className="py-4 px-6">Register Number</th>
                       <th className="py-4 px-6">Selection</th>
                       <th className="py-4 px-6">Timestamp</th>
+                      <th className="py-4 px-6 text-right">Action</th>
                     </tr>
                   </thead>
                   <tbody className="text-sm divide-y divide-slate-900 bg-slate-950/40">
@@ -581,6 +638,20 @@ export default function AdminDashboard() {
                         <td className="py-4 px-6 font-medium text-emerald-400">{log.candidate_name}</td>
                         <td className="py-4 px-6 text-xs text-slate-500">
                           {new Date(log.created_at).toLocaleString()}
+                        </td>
+                        <td className="py-4 px-6 text-right">
+                          <button
+                            onClick={() => handleCancelVote(log.id, log.voter_reg_no)}
+                            disabled={cancellingVoteId === log.id}
+                            className="inline-flex items-center gap-1 text-xs text-red-400 hover:text-white bg-red-500/10 hover:bg-red-600 border border-red-500/30 px-2.5 py-1 rounded-lg font-medium transition-all"
+                          >
+                            {cancellingVoteId === log.id ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              <XCircle className="w-3.5 h-3.5" />
+                            )}
+                            Cancel Vote
+                          </button>
                         </td>
                       </tr>
                     ))}

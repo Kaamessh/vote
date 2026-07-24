@@ -17,6 +17,7 @@ export default function UserLogin() {
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [hasVotedState, setHasVotedState] = useState(false);
+  const [canonicalRegNo, setCanonicalRegNo] = useState<string>('');
   const router = useRouter();
 
   // Check for active election
@@ -73,19 +74,21 @@ export default function UserLogin() {
       return;
     }
 
-    // Input Validation using our utility
+    // Validation & Normalization (e.g., 01 -> 1, 034 -> 34)
     const validation = validateRegisterNumber(regNo);
-    if (!validation.isValid) {
+    if (!validation.isValid || !validation.normalizedRegNo) {
       setErrorMsg(validation.error || 'Invalid Number');
       return;
     }
 
+    const normalizedReg = validation.normalizedRegNo;
+    setCanonicalRegNo(normalizedReg);
     setIsLoading(true);
 
     try {
-      // Secure check via RPC if user has already voted
+      // Secure check via RPC using normalized register number
       const { data: hasVoted, error } = await supabase.rpc('check_has_voted', {
-        p_reg_no: regNo,
+        p_reg_no: normalizedReg,
         p_election_id: activeElectionId,
       });
 
@@ -93,14 +96,13 @@ export default function UserLogin() {
 
       if (hasVoted) {
         setHasVotedState(true);
-        // Save status in sessionStorage so they are locked into already voted page
         sessionStorage.setItem('voter_name', trimmedName);
-        sessionStorage.setItem('voter_reg_no', regNo);
+        sessionStorage.setItem('voter_reg_no', normalizedReg);
         sessionStorage.setItem('voter_status', 'already_voted');
       } else {
-        // Successful login, save details
+        // Successful login, save normalized details
         sessionStorage.setItem('voter_name', trimmedName);
-        sessionStorage.setItem('voter_reg_no', regNo);
+        sessionStorage.setItem('voter_reg_no', normalizedReg);
         sessionStorage.setItem('voter_status', 'eligible');
         sessionStorage.setItem('active_election_id', activeElectionId);
         
@@ -123,7 +125,7 @@ export default function UserLogin() {
     );
   }
 
-  // Already Voted State UI (integrated directly into page for seamless flow)
+  // Already Voted State UI
   if (hasVotedState) {
     return (
       <div className="relative min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-between overflow-hidden">
@@ -146,7 +148,7 @@ export default function UserLogin() {
               <h1 className="text-2xl font-bold text-white">Access Denied</h1>
               <h2 className="text-red-400 font-semibold uppercase tracking-wider text-sm">Already Voted</h2>
               <p className="text-slate-400 text-sm leading-relaxed mt-4">
-                Dear <span className="font-semibold text-white">{name}</span> (Reg. No: <span className="font-mono text-white">{regNo}</span>), our records show that a ballot has already been submitted under this register number for the current election <span className="text-white italic">"{electionTitle}"</span>.
+                Dear <span className="font-semibold text-white">{name}</span> (Reg. No: <span className="font-mono text-white">{canonicalRegNo || regNo}</span>), our records show that a ballot has already been submitted under this register number for the current election <span className="text-white italic">"{electionTitle}"</span>.
               </p>
             </div>
             <div className="pt-4">
@@ -262,7 +264,7 @@ export default function UserLogin() {
                     required
                     value={regNo}
                     onChange={handleRegNoChange}
-                    placeholder="e.g. 5, 301, 701"
+                    placeholder="e.g. 1, 01, 301, 701"
                     className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-white placeholder-slate-600 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all text-sm font-mono"
                   />
                 </div>
@@ -272,7 +274,7 @@ export default function UserLogin() {
                   <HelpCircle className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
                   <div>
                     <p className="font-semibold text-slate-300">Eligibility Criteria</p>
-                    <p className="mt-1 text-slate-500">Only whitelisted roll numbers for AI & DS department are eligible. Each voter can only submit one vote.</p>
+                    <p className="mt-1 text-slate-500">Only whitelisted roll numbers for AI & DS department are eligible. Leading zeros (e.g. 01 and 1) are treated as identical.</p>
                   </div>
                 </div>
 
