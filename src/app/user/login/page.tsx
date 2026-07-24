@@ -51,25 +51,31 @@ export default function UserLogin() {
     const normalizedRegNo = valResult.normalizedRegNo;
 
     try {
-      const { data, error: rpcError } = await supabase.rpc('authenticate_voter', {
-        p_reg_no: normalizedRegNo,
-        p_password: trimmedPassword,
-      });
+      // Query voters table directly to avoid RPC schema cache mismatches
+      const { data: userAccount, error: fetchErr } = await supabase
+        .from('voters')
+        .select('*')
+        .eq('reg_no', normalizedRegNo)
+        .maybeSingle();
 
-      if (rpcError) throw rpcError;
+      if (fetchErr) throw fetchErr;
 
-      if (data && data.length > 0) {
-        if (!data[0].success) {
-          setError(data[0].message || 'Invalid credentials.');
-          setLoading(false);
-          return;
-        }
-
-        // Credentials verified
-        sessionStorage.setItem('voter_name', data[0].voter_name);
-        sessionStorage.setItem('voter_reg_no', normalizedRegNo);
-        router.push('/user/portal');
+      if (!userAccount) {
+        setError(`Register Number ${normalizedRegNo} is not registered yet. Please click 'Register First' to create your account.`);
+        setLoading(false);
+        return;
       }
+
+      if (userAccount.password !== trimmedPassword) {
+        setError('Invalid password. Please check your credentials.');
+        setLoading(false);
+        return;
+      }
+
+      // Credentials verified successfully
+      sessionStorage.setItem('voter_name', userAccount.name);
+      sessionStorage.setItem('voter_reg_no', normalizedRegNo);
+      router.push('/user/portal');
     } catch (err: any) {
       console.error('Login error:', err);
       setError(err.message || 'Login failed. Please try again.');
@@ -95,14 +101,15 @@ export default function UserLogin() {
       return;
     }
 
-    if (trimmedPassword !== trimmedConfirm) {
-      setError('Passwords do not match. Please verify your password.');
+    // Password must be above 6 characters (>= 6)
+    if (trimmedPassword.length < 6) {
+      setError('Password must be at least 6 characters long.');
       setLoading(false);
       return;
     }
 
-    if (trimmedPassword.length < 4) {
-      setError('Password must be at least 4 characters long.');
+    if (trimmedPassword !== trimmedConfirm) {
+      setError('Passwords do not match. Please verify your password.');
       setLoading(false);
       return;
     }
@@ -117,29 +124,39 @@ export default function UserLogin() {
     const normalizedRegNo = valResult.normalizedRegNo;
 
     try {
-      const { data, error: rpcError } = await supabase.rpc('register_voter_account', {
-        p_reg_no: normalizedRegNo,
-        p_name: trimmedName,
-        p_password: trimmedPassword,
-      });
+      // 1. Check if Register Number is already registered in voters table
+      const { data: existingUser, error: checkErr } = await supabase
+        .from('voters')
+        .select('reg_no')
+        .eq('reg_no', normalizedRegNo)
+        .maybeSingle();
 
-      if (rpcError) throw rpcError;
+      if (checkErr) throw checkErr;
 
-      if (data && data.length > 0) {
-        if (!data[0].success) {
-          setError(data[0].message || 'Registration failed.');
-          setLoading(false);
-          return;
-        }
-
-        // Registration successful -> auto login
-        sessionStorage.setItem('voter_name', trimmedName);
-        sessionStorage.setItem('voter_reg_no', normalizedRegNo);
-        setSuccessMsg('Account registered successfully! Redirecting to portal...');
-        setTimeout(() => {
-          router.push('/user/portal');
-        }, 1000);
+      if (existingUser) {
+        setError(`Register Number ${normalizedRegNo} is already registered. Please switch to the Login tab.`);
+        setLoading(false);
+        return;
       }
+
+      // 2. Insert new voter account directly into voters table
+      const { error: insertErr } = await supabase
+        .from('voters')
+        .insert({
+          reg_no: normalizedRegNo,
+          name: trimmedName,
+          password: trimmedPassword,
+        });
+
+      if (insertErr) throw insertErr;
+
+      // Registration successful -> auto login
+      sessionStorage.setItem('voter_name', trimmedName);
+      sessionStorage.setItem('voter_reg_no', normalizedRegNo);
+      setSuccessMsg('Account registered successfully! Redirecting to portal...');
+      setTimeout(() => {
+        router.push('/user/portal');
+      }, 800);
     } catch (err: any) {
       console.error('Registration error:', err);
       setError(err.message || 'Registration failed. Please try again.');
@@ -310,11 +327,12 @@ export default function UserLogin() {
 
               <div className="space-y-1.5">
                 <label className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-                  <KeyRound className="w-3.5 h-3.5 text-emerald-400" /> Create Password
+                  <KeyRound className="w-3.5 h-3.5 text-emerald-400" /> Create Password (Min 6 characters)
                 </label>
                 <input
                   type="password"
                   required
+                  minLength={6}
                   value={regPassword}
                   onChange={(e) => setRegPassword(e.target.value)}
                   placeholder="Choose a secret password"
@@ -329,6 +347,7 @@ export default function UserLogin() {
                 <input
                   type="password"
                   required
+                  minLength={6}
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
                   placeholder="Re-enter your password"
