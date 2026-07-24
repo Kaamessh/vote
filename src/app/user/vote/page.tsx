@@ -19,7 +19,8 @@ import {
   ArrowLeft,
   Crown,
   TrendingDown,
-  Trophy
+  Trophy,
+  XCircle
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -227,6 +228,15 @@ function VotingArenaContent() {
         );
       }
       const margin = highestVotes - secondHighestVotes;
+
+      if (isCompleted) {
+        return (
+          <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 font-bold rounded-full">
+            <Trophy className="w-3 h-3 text-emerald-400" /> Won by {margin} {margin === 1 ? 'vote' : 'votes'}
+          </span>
+        );
+      }
+
       return (
         <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 font-bold rounded-full">
           <Crown className="w-3 h-3 text-emerald-400" /> Leading by {margin} {margin === 1 ? 'vote' : 'votes'}
@@ -234,6 +244,15 @@ function VotingArenaContent() {
       );
     } else if (highestVotes > 0) {
       const trailing = highestVotes - cand.votes_count;
+
+      if (isCompleted) {
+        return (
+          <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 bg-rose-500/20 border border-rose-500/40 text-rose-400 font-bold rounded-full">
+            <XCircle className="w-3 h-3 text-rose-400" /> Lost by {trailing} {trailing === 1 ? 'vote' : 'votes'}
+          </span>
+        );
+      }
+
       return (
         <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 bg-rose-500/10 border border-rose-500/30 text-rose-400 font-semibold rounded-full">
           <TrendingDown className="w-3 h-3 text-rose-400" /> Trailing by {trailing} {trailing === 1 ? 'vote' : 'votes'}
