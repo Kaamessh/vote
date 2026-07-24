@@ -124,13 +124,12 @@ function VotingArenaContent() {
     verifyVoterSession();
   }, [router, targetElectionId]);
 
-  // Realtime listener for live vote count updates & device lock kickouts
+  // Realtime listener for live vote count updates
   useEffect(() => {
-    if (!targetElectionId || !voterRegNo) return;
-    const localDeviceId = localStorage.getItem('voter_device_id');
+    if (!targetElectionId) return;
 
     const candidateChannel = supabase
-      .channel(`voter-candidates-live-${targetElectionId}-${voterRegNo}`)
+      .channel(`voter-candidates-live-${targetElectionId}`)
       .on(
         'postgres_changes',
         {
@@ -153,34 +152,12 @@ function VotingArenaContent() {
           refetchCandidates();
         }
       )
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'voter_sessions',
-          filter: `voter_reg_no=eq.${voterRegNo}`,
-        },
-        (payload: any) => {
-          if (payload.eventType === 'UPDATE' || payload.eventType === 'INSERT') {
-            if (localDeviceId && payload.new?.device_id !== localDeviceId) {
-              alert(`Register Number ${voterRegNo} has been accessed on another device. Logging out.`);
-              sessionStorage.clear();
-              router.replace('/user/login');
-            }
-          } else if (payload.eventType === 'DELETE') {
-            alert(`Your device lock for Register Number ${voterRegNo} was reset by Admin.`);
-            sessionStorage.clear();
-            router.replace('/user/login');
-          }
-        }
-      )
       .subscribe();
 
     return () => {
       supabase.removeChannel(candidateChannel);
     };
-  }, [targetElectionId, voterRegNo, router]);
+  }, [targetElectionId]);
 
   const handleCastVote = async () => {
     if (hasVotedRole || !selectedCandidateId || !targetElectionId || !voterName || !voterRegNo) return;

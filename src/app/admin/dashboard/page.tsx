@@ -22,9 +22,14 @@ import {
   Crown,
   TrendingDown,
   Trophy,
-  Smartphone,
+  Settings,
+  Edit2,
+  Lock,
+  Clock,
   KeyRound,
-  Clock
+  UserCheck,
+  Save,
+  X
 } from 'lucide-react';
 
 interface Candidate {
@@ -49,11 +54,11 @@ interface VoteLog {
   candidate_name: string;
 }
 
-interface VoterSession {
-  voter_reg_no: string;
-  voter_name: string;
-  device_id: string;
-  last_active: string;
+interface VoterAccount {
+  reg_no: string;
+  name: string;
+  password: string;
+  created_at: string;
 }
 
 export default function AdminDashboard() {
@@ -68,9 +73,13 @@ export default function AdminDashboard() {
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [voteLogs, setVoteLogs] = useState<VoteLog[]>([]);
   
-  // Active Voter Device Sessions
-  const [voterSessions, setVoterSessions] = useState<VoterSession[]>([]);
-  const [clearingRegNo, setClearingRegNo] = useState<string | null>(null);
+  // Registered Voter Accounts Settings Panel State
+  const [voterAccounts, setVoterAccounts] = useState<VoterAccount[]>([]);
+  const [editingRegNo, setEditingRegNo] = useState<string | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editPassword, setEditPassword] = useState('');
+  const [isSavingAccount, setIsSavingAccount] = useState(false);
+  const [deletingRegNo, setDeletingRegNo] = useState<string | null>(null);
 
   const router = useRouter();
 
@@ -139,18 +148,18 @@ export default function AdminDashboard() {
     }
   }, []);
 
-  // Fetch active voter sessions (Device Locks)
-  const fetchVoterSessions = useCallback(async () => {
+  // Fetch registered voter accounts (Settings)
+  const fetchVoterAccounts = useCallback(async () => {
     try {
       const { data, error } = await supabase
-        .from('voter_sessions')
+        .from('voters')
         .select('*')
-        .order('last_active', { ascending: false });
+        .order('created_at', { ascending: false });
 
       if (error) throw error;
-      setVoterSessions(data || []);
+      setVoterAccounts(data || []);
     } catch (err: unknown) {
-      console.error('Error fetching voter sessions:', err);
+      console.error('Error fetching voter accounts:', err);
     }
   }, []);
 
@@ -198,9 +207,9 @@ export default function AdminDashboard() {
   useEffect(() => {
     if (isAdmin) {
       fetchElectionsList();
-      fetchVoterSessions();
+      fetchVoterAccounts();
     }
-  }, [isAdmin, fetchElectionsList, fetchVoterSessions]);
+  }, [isAdmin, fetchElectionsList, fetchVoterAccounts]);
 
   useEffect(() => {
     if (selectedElectionId) {
@@ -236,10 +245,10 @@ export default function AdminDashboard() {
       })
       .subscribe();
 
-    const sessionsChannel = supabase
-      .channel('admin-sessions-realtime')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'voter_sessions' }, () => {
-        fetchVoterSessions();
+    const votersChannel = supabase
+      .channel('admin-voters-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'voters' }, () => {
+        fetchVoterAccounts();
       })
       .subscribe();
 
@@ -247,9 +256,9 @@ export default function AdminDashboard() {
       supabase.removeChannel(electionsChannel);
       supabase.removeChannel(candidateChannel);
       supabase.removeChannel(votesChannel);
-      supabase.removeChannel(sessionsChannel);
+      supabase.removeChannel(votersChannel);
     };
-  }, [isAdmin, selectedElectionId, fetchElectionsList, fetchSelectedElectionData, fetchVoterSessions]);
+  }, [isAdmin, selectedElectionId, fetchElectionsList, fetchSelectedElectionData, fetchVoterAccounts]);
 
   // Form candidate list handlers
   const addCandidateToList = (e?: React.FormEvent) => {
@@ -346,25 +355,62 @@ export default function AdminDashboard() {
     }
   };
 
-  // Clear / Unlock Device Session for a voter
-  const handleClearDeviceLock = async (regNo: string, voterName: string) => {
-    if (!confirm(`Are you sure you want to unlock Register Number ${regNo} (${voterName})? This will allow them to register/login on a new device.`)) {
+  // Admin Settings: Start Editing Voter Account
+  const startEditingAccount = (account: VoterAccount) => {
+    setEditingRegNo(account.reg_no);
+    setEditName(account.name);
+    setEditPassword(account.password);
+  };
+
+  // Admin Settings: Save Edited Voter Account
+  const handleSaveAccount = async (regNo: string) => {
+    if (!editName.trim() || !editPassword.trim()) {
+      alert('Name and password cannot be empty.');
       return;
     }
 
-    setClearingRegNo(regNo);
+    setIsSavingAccount(true);
     try {
-      const { error } = await supabase.rpc('clear_voter_device_session', {
-        p_reg_no: regNo,
-      });
+      const { error } = await supabase
+        .from('voters')
+        .update({
+          name: editName.trim(),
+          password: editPassword.trim(),
+        })
+        .eq('reg_no', regNo);
 
       if (error) throw error;
-      await fetchVoterSessions();
+
+      setEditingRegNo(null);
+      await fetchVoterAccounts();
     } catch (err: any) {
-      console.error('Error clearing device session:', err);
-      alert('Failed to clear device lock: ' + err.message);
+      console.error('Error updating voter account:', err);
+      alert('Failed to update account: ' + err.message);
     } finally {
-      setClearingRegNo(null);
+      setIsSavingAccount(false);
+    }
+  };
+
+  // Admin Settings: Delete Voter Account Completely
+  const handleDeleteVoterAccount = async (regNo: string, voterName: string) => {
+    if (!confirm(`Are you sure you want to COMPLETELY DELETE the account for Register Number ${regNo} (${voterName})? The voter will be required to register again from scratch.`)) {
+      return;
+    }
+
+    setDeletingRegNo(regNo);
+    try {
+      const { error } = await supabase
+        .from('voters')
+        .delete()
+        .eq('reg_no', regNo);
+
+      if (error) throw error;
+      await fetchVoterAccounts();
+    } catch (err: any) {
+      console.error('Error deleting voter account:', err);
+      alert('Failed to delete account: ' + err.message);
+    } finally {
+      setDeletingRegNo(null);
     }
   };
 
@@ -401,7 +447,6 @@ export default function AdminDashboard() {
     router.push('/admin/login');
   };
 
-  // 4-way Sorting Toggles (Name | Reg No | Candidate | Timestamp)
   const handleSortToggle = (field: 'name' | 'reg_no' | 'candidate' | 'timestamp') => {
     if (sortBy === field) {
       setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
@@ -855,197 +900,249 @@ export default function AdminDashboard() {
           </section>
         </div>
 
-        {/* Active Device Locks Management Panel */}
+        {/* Registered Voter Accounts Settings Panel (Admin Control) */}
         <section className="bg-slate-900/40 border border-slate-900 rounded-2xl p-6 backdrop-blur-sm space-y-6">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-800/60 pb-4 gap-4">
             <div className="flex items-center gap-2">
-              <Smartphone className="w-5 h-5 text-emerald-400" />
+              <Settings className="w-5 h-5 text-emerald-400" />
               <div>
-                <h2 className="text-lg font-bold text-white">Active Registered Device Locks</h2>
+                <h2 className="text-lg font-bold text-white">Voter Account Settings & Password Control</h2>
                 <p className="text-xs text-slate-500">
-                  Enforcing 1 device per voter. Admin can reset locks if students change phones.
+                  Manage registered voter credentials. Edit names/passwords or delete accounts to allow fresh registration.
                 </p>
               </div>
             </div>
-            <span className="text-xs px-3 py-1 bg-slate-950 border border-slate-800 rounded-lg text-slate-400 font-mono">
-              {voterSessions.length} Devices Locked
+            <span className="text-xs px-3 py-1 bg-slate-950 border border-slate-800 rounded-lg text-emerald-400 font-mono flex items-center gap-1.5">
+              <UserCheck className="w-3.5 h-3.5" /> {voterAccounts.length} Registered Accounts
             </span>
           </div>
 
-          {voterSessions.length > 0 ? (
-            <div className="overflow-x-auto border border-slate-900 rounded-xl max-h-64 overflow-y-auto">
+          {voterAccounts.length > 0 ? (
+            <div className="overflow-x-auto border border-slate-900 rounded-xl max-h-72 overflow-y-auto">
               <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="bg-slate-950 text-slate-400 text-xs font-semibold uppercase border-b border-slate-900">
-                    <th className="py-3 px-6">Voter Name</th>
-                    <th className="py-3 px-6">Register Number</th>
-                    <th className="py-3 px-6">Device UUID</th>
-                    <th className="py-3 px-6">Last Active</th>
-                    <th className="py-3 px-6 text-right">Action</th>
+                    <th className="py-3.5 px-6">Voter Name</th>
+                    <th className="py-3.5 px-6">Register Number</th>
+                    <th className="py-3.5 px-6">Registered Password</th>
+                    <th className="py-3.5 px-6">Registered At</th>
+                    <th className="py-3.5 px-6 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="text-sm divide-y divide-slate-900 bg-slate-950/40">
-                  {voterSessions.map((session) => (
-                    <tr key={session.voter_reg_no} className="hover:bg-slate-900/20 transition-colors text-slate-200">
-                      <td className="py-3 px-6 font-semibold">{session.voter_name}</td>
-                      <td className="py-3 px-6">
-                        <span className="bg-slate-900 border border-slate-800 px-2.5 py-1 rounded text-xs font-mono text-slate-400">
-                          {session.voter_reg_no}
-                        </span>
-                      </td>
-                      <td className="py-3 px-6 font-mono text-xs text-slate-500">
-                        {session.device_id.slice(0, 13)}...
-                      </td>
-                      <td className="py-3 px-6 text-xs text-slate-500">
-                        {new Date(session.last_active).toLocaleString()}
-                      </td>
-                      <td className="py-3 px-6 text-right">
-                        <button
-                          onClick={() => handleClearDeviceLock(session.voter_reg_no, session.voter_name)}
-                          disabled={clearingRegNo === session.voter_reg_no}
-                          className="inline-flex items-center gap-1 text-xs text-indigo-400 hover:text-white bg-indigo-500/10 hover:bg-indigo-600 border border-indigo-500/30 px-2.5 py-1 rounded-lg font-medium transition-all"
-                        >
-                          {clearingRegNo === session.voter_reg_no ? (
-                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  {voterAccounts.map((account) => {
+                    const isEditing = editingRegNo === account.reg_no;
+                    return (
+                      <tr key={account.reg_no} className="hover:bg-slate-900/20 transition-colors text-slate-200">
+                        <td className="py-3.5 px-6 font-semibold">
+                          {isEditing ? (
+                            <input
+                              type="text"
+                              value={editName}
+                              onChange={(e) => setEditName(e.target.value)}
+                              className="bg-slate-950 border border-indigo-500 rounded px-2.5 py-1 text-xs text-white focus:outline-none"
+                            />
                           ) : (
-                            <KeyRound className="w-3.5 h-3.5" />
+                            account.name
                           )}
-                          Reset Device Lock
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <div className="text-center py-8 text-slate-500 border border-dashed border-slate-900 rounded-xl bg-slate-950/20 text-xs">
-              No active device sessions registered yet.
-            </div>
-          )}
-        </section>
-
-        {/* Exclusive Voter Audit Log Section with 4-Way Sorting */}
-        <section className="bg-slate-900/40 border border-slate-900 rounded-2xl p-6 backdrop-blur-sm space-y-6">
-          <div className="flex flex-col md:flex-row md:items-center justify-between border-b border-slate-800/60 pb-4 gap-4">
-            <div className="flex items-center gap-2">
-              <ClipboardList className="w-5 h-5 text-indigo-400" />
-              <div>
-                <h2 className="text-lg font-bold text-white">Exclusive Voter Audit Log</h2>
-                <p className="text-xs text-slate-500">
-                  Showing audit records for role: <span className="text-indigo-400 font-semibold">{currentSelectedElection?.title || 'None Selected'}</span>
-                </p>
-              </div>
-            </div>
-
-            {/* 4-Way Sorting Toggles: Voter Name, Reg No, Candidate Choice, Timestamp */}
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-xs text-slate-400 font-semibold uppercase">Sort By:</span>
-              <div className="inline-flex flex-wrap rounded-lg border border-slate-800 p-0.5 bg-slate-950">
-                <button
-                  onClick={() => handleSortToggle('name')}
-                  className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold transition-all ${
-                    sortBy === 'name' 
-                      ? 'bg-indigo-600 text-white shadow-sm' 
-                      : 'text-slate-400 hover:text-white'
-                  }`}
-                >
-                  Voter Name <ArrowUpDown className="w-3 h-3" />
-                </button>
-                <button
-                  onClick={() => handleSortToggle('reg_no')}
-                  className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold transition-all ${
-                    sortBy === 'reg_no' 
-                      ? 'bg-indigo-600 text-white shadow-sm' 
-                      : 'text-slate-400 hover:text-white'
-                  }`}
-                >
-                  Reg Number <ArrowUpDown className="w-3 h-3" />
-                </button>
-                <button
-                  onClick={() => handleSortToggle('candidate')}
-                  className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold transition-all ${
-                    sortBy === 'candidate' 
-                      ? 'bg-indigo-600 text-white shadow-sm' 
-                      : 'text-slate-400 hover:text-white'
-                  }`}
-                >
-                  Candidate Choice <ArrowUpDown className="w-3 h-3" />
-                </button>
-                <button
-                  onClick={() => handleSortToggle('timestamp')}
-                  className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold transition-all ${
-                    sortBy === 'timestamp' 
-                      ? 'bg-indigo-600 text-white shadow-sm' 
-                      : 'text-slate-400 hover:text-white'
-                  }`}
-                >
-                  Timestamp <Clock className="w-3 h-3" />
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {selectedElectionId ? (
-            voteLogs.length > 0 ? (
-              <div className="overflow-x-auto border border-slate-900 rounded-xl">
-                <table className="w-full text-left border-collapse">
-                  <thead>
-                    <tr className="bg-slate-950 text-slate-400 text-xs font-semibold uppercase border-b border-slate-900">
-                      <th className="py-4 px-6">Voter Name</th>
-                      <th className="py-4 px-6">Register Number</th>
-                      <th className="py-4 px-6">Candidate Choice</th>
-                      <th className="py-4 px-6">Timestamp</th>
-                      <th className="py-4 px-6 text-right">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody className="text-sm divide-y divide-slate-900 bg-slate-950/40">
-                    {getSortedVoteLogs().map((log) => (
-                      <tr key={log.id} className="hover:bg-slate-900/20 transition-colors text-slate-200">
-                        <td className="py-4 px-6 font-semibold">{log.voter_name}</td>
-                        <td className="py-4 px-6">
-                          <span className="bg-slate-900 border border-slate-800 px-2.5 py-1 rounded text-xs font-mono text-slate-400">
-                            {log.voter_reg_no}
+                        </td>
+                        <td className="py-3.5 px-6">
+                          <span className="bg-slate-900 border border-slate-800 px-2.5 py-1 rounded text-xs font-mono text-slate-300">
+                            {account.reg_no}
                           </span>
                         </td>
-                        <td className="py-4 px-6 font-medium text-emerald-400">{log.candidate_name}</td>
-                        <td className="py-4 px-6 text-xs text-slate-500">
-                          {new Date(log.created_at).toLocaleString()}
+                        <td className="py-3.5 px-6">
+                          {isEditing ? (
+                            <input
+                              type="text"
+                              value={editPassword}
+                              onChange={(e) => setEditPassword(e.target.value)}
+                              className="bg-slate-950 border border-indigo-500 rounded px-2.5 py-1 text-xs text-white focus:outline-none font-mono"
+                            />
+                          ) : (
+                            <span className="font-mono text-xs text-slate-400 flex items-center gap-1">
+                              <KeyRound className="w-3 h-3 text-slate-600" /> {account.password}
+                            </span>
+                          )}
                         </td>
-                        <td className="py-4 px-6 text-right">
-                          <button
-                            onClick={() => handleCancelVote(log.id, log.voter_reg_no)}
-                            disabled={cancellingVoteId === log.id}
-                            className="inline-flex items-center gap-1 text-xs text-red-400 hover:text-white bg-red-500/10 hover:bg-red-600 border border-red-500/30 px-2.5 py-1 rounded-lg font-medium transition-all"
-                          >
-                            {cancellingVoteId === log.id ? (
-                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                            ) : (
-                              <XCircle className="w-3.5 h-3.5" />
-                            )}
-                            Cancel Vote
-                          </button>
+                        <td className="py-3.5 px-6 text-xs text-slate-500">
+                          {new Date(account.created_at).toLocaleString()}
+                        </td>
+                        <td className="py-3.5 px-6 text-right space-x-2">
+                          {isEditing ? (
+                            <>
+                              <button
+                                onClick={() => handleSaveAccount(account.reg_no)}
+                                disabled={isSavingAccount}
+                                className="inline-flex items-center gap-1 text-xs text-emerald-400 hover:text-white bg-emerald-500/10 hover:bg-emerald-600 border border-emerald-500/30 px-2.5 py-1 rounded-lg font-medium transition-all"
+                              >
+                                {isSavingAccount ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
+                                Save
+                              </button>
+                              <button
+                                onClick={() => setEditingRegNo(null)}
+                                className="inline-flex items-center gap-1 text-xs text-slate-400 hover:text-white bg-slate-900 border border-slate-800 px-2.5 py-1 rounded-lg font-medium transition-all"
+                              >
+                                <X className="w-3 h-3" /> Cancel
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              <button
+                                onClick={() => startEditingAccount(account)}
+                                className="inline-flex items-center gap-1 text-xs text-indigo-400 hover:text-white bg-indigo-500/10 hover:bg-indigo-600 border border-indigo-500/30 px-2.5 py-1 rounded-lg font-medium transition-all"
+                              >
+                                <Edit2 className="w-3 h-3" /> Edit
+                              </button>
+                              <button
+                                onClick={() => handleDeleteVoterAccount(account.reg_no, account.name)}
+                                disabled={deletingRegNo === account.reg_no}
+                                className="inline-flex items-center gap-1 text-xs text-red-400 hover:text-white bg-red-500/10 hover:bg-red-600 border border-red-500/30 px-2.5 py-1 rounded-lg font-medium transition-all"
+                              >
+                                {deletingRegNo === account.reg_no ? (
+                                  <Loader2 className="w-3 h-3 animate-spin" />
+                                ) : (
+                                  <Trash2 className="w-3 h-3" />
+                                )}
+                                Delete Account
+                              </button>
+                            </>
+                          )}
                         </td>
                       </tr>
-                    ))}
-                  </tbody>
+                    );
+                  })}
+                </tbody>
                 </table>
               </div>
             ) : (
-              <div className="text-center py-12 text-slate-500 border border-dashed border-slate-900 rounded-xl bg-slate-950/20">
-                <Users className="w-8 h-8 text-slate-700 mx-auto mb-2" />
-                <p className="text-sm font-semibold">No Votes Logged for this Role Yet</p>
-                <p className="text-xs text-slate-600 mt-1">Waiting for eligible voters to submit their choices for "{currentSelectedElection?.title}".</p>
+              <div className="text-center py-8 text-slate-500 border border-dashed border-slate-900 rounded-xl bg-slate-950/20 text-xs">
+                No voters registered yet. Registered accounts will appear here for admin password/name management.
               </div>
-            )
-          ) : (
-            <div className="text-center py-12 text-slate-500 border border-dashed border-slate-900 rounded-xl bg-slate-950/20">
-              <ClipboardList className="w-8 h-8 text-slate-700 mx-auto mb-2" />
-              <p className="text-sm font-semibold">No Role Selected</p>
-              <p className="text-xs text-slate-600 mt-1">Select an active election role above to view its audit log.</p>
+            )}
+          </section>
+
+          {/* Exclusive Voter Audit Log Section with 4-Way Sorting */}
+          <section className="bg-slate-900/40 border border-slate-900 rounded-2xl p-6 backdrop-blur-sm space-y-6">
+            <div className="flex flex-col md:flex-row md:items-center justify-between border-b border-slate-800/60 pb-4 gap-4">
+              <div className="flex items-center gap-2">
+                <ClipboardList className="w-5 h-5 text-indigo-400" />
+                <div>
+                  <h2 className="text-lg font-bold text-white">Exclusive Voter Audit Log</h2>
+                  <p className="text-xs text-slate-500">
+                    Showing audit records for role: <span className="text-indigo-400 font-semibold">{currentSelectedElection?.title || 'None Selected'}</span>
+                  </p>
+                </div>
+              </div>
+
+              {/* 4-Way Sorting Toggles: Voter Name, Reg No, Candidate Choice, Timestamp */}
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs text-slate-400 font-semibold uppercase">Sort By:</span>
+                <div className="inline-flex flex-wrap rounded-lg border border-slate-800 p-0.5 bg-slate-950">
+                  <button
+                    onClick={() => handleSortToggle('name')}
+                    className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold transition-all ${
+                      sortBy === 'name' 
+                        ? 'bg-indigo-600 text-white shadow-sm' 
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Voter Name <ArrowUpDown className="w-3 h-3" />
+                  </button>
+                  <button
+                    onClick={() => handleSortToggle('reg_no')}
+                    className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold transition-all ${
+                      sortBy === 'reg_no' 
+                        ? 'bg-indigo-600 text-white shadow-sm' 
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Reg Number <ArrowUpDown className="w-3 h-3" />
+                  </button>
+                  <button
+                    onClick={() => handleSortToggle('candidate')}
+                    className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold transition-all ${
+                      sortBy === 'candidate' 
+                        ? 'bg-indigo-600 text-white shadow-sm' 
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Candidate Choice <ArrowUpDown className="w-3 h-3" />
+                  </button>
+                  <button
+                    onClick={() => handleSortToggle('timestamp')}
+                    className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold transition-all ${
+                      sortBy === 'timestamp' 
+                        ? 'bg-indigo-600 text-white shadow-sm' 
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    Timestamp <Clock className="w-3 h-3" />
+                  </button>
+                </div>
+              </div>
             </div>
-          )}
-        </section>
+
+            {selectedElectionId ? (
+              voteLogs.length > 0 ? (
+                <div className="overflow-x-auto border border-slate-900 rounded-xl">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="bg-slate-950 text-slate-400 text-xs font-semibold uppercase border-b border-slate-900">
+                        <th className="py-4 px-6">Voter Name</th>
+                        <th className="py-4 px-6">Register Number</th>
+                        <th className="py-4 px-6">Candidate Choice</th>
+                        <th className="py-4 px-6">Timestamp</th>
+                        <th className="py-4 px-6 text-right">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="text-sm divide-y divide-slate-900 bg-slate-950/40">
+                      {getSortedVoteLogs().map((log) => (
+                        <tr key={log.id} className="hover:bg-slate-900/20 transition-colors text-slate-200">
+                          <td className="py-4 px-6 font-semibold">{log.voter_name}</td>
+                          <td className="py-4 px-6">
+                            <span className="bg-slate-900 border border-slate-800 px-2.5 py-1 rounded text-xs font-mono text-slate-400">
+                              {log.voter_reg_no}
+                            </span>
+                          </td>
+                          <td className="py-4 px-6 font-medium text-emerald-400">{log.candidate_name}</td>
+                          <td className="py-4 px-6 text-xs text-slate-500">
+                            {new Date(log.created_at).toLocaleString()}
+                          </td>
+                          <td className="py-4 px-6 text-right">
+                            <button
+                              onClick={() => handleCancelVote(log.id, log.voter_reg_no)}
+                              disabled={cancellingVoteId === log.id}
+                              className="inline-flex items-center gap-1 text-xs text-red-400 hover:text-white bg-red-500/10 hover:bg-red-600 border border-red-500/30 px-2.5 py-1 rounded-lg font-medium transition-all"
+                            >
+                              {cancellingVoteId === log.id ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <XCircle className="w-3.5 h-3.5" />
+                              )}
+                              Cancel Vote
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <div className="text-center py-12 text-slate-500 border border-dashed border-slate-900 rounded-xl bg-slate-950/20">
+                  <Users className="w-8 h-8 text-slate-700 mx-auto mb-2" />
+                  <p className="text-sm font-semibold">No Votes Logged for this Role Yet</p>
+                  <p className="text-xs text-slate-600 mt-1">Waiting for eligible voters to submit their choices for "{currentSelectedElection?.title}".</p>
+                </div>
+              )
+            ) : (
+              <div className="text-center py-12 text-slate-500 border border-dashed border-slate-900 rounded-xl bg-slate-950/20">
+                <ClipboardList className="w-8 h-8 text-slate-700 mx-auto mb-2" />
+                <p className="text-sm font-semibold">No Role Selected</p>
+                <p className="text-xs text-slate-600 mt-1">Select an active election role above to view its audit log.</p>
+              </div>
+            )}
+          </section>
       </main>
 
       {/* Footer */}
