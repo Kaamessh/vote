@@ -17,7 +17,8 @@ import {
   Users,
   Clock,
   Award,
-  ArrowLeft
+  ArrowLeft,
+  Eye
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -40,10 +41,14 @@ function VotingArenaContent() {
   const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null);
   const [checkingEligibility, setCheckingEligibility] = useState(true);
   const [isSubmittingVote, setIsSubmittingVote] = useState(false);
-  const [voteSuccess, setVoteSuccess] = useState(false);
-  const [alreadyVotedThisRole, setAlreadyVotedThisRole] = useState(false);
-  const [votedForName, setVotedForName] = useState<string>('');
+  
+  // User's vote status for this election
+  const [hasVotedRole, setHasVotedRole] = useState(false);
+  const [votedCandidateId, setVotedCandidateId] = useState<string | null>(null);
+  const [votedCandidateName, setVotedCandidateName] = useState<string | null>(null);
+
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [justVotedSuccessMsg, setJustVotedSuccessMsg] = useState<string | null>(null);
 
   useEffect(() => {
     const verifyVoterSession = async () => {
@@ -64,21 +69,7 @@ function VotingArenaContent() {
       setVoterRegNo(storedRegNo);
 
       try {
-        // 1. Check if voter already voted for THIS specific election role
-        const { data: hasVoted, error: checkError } = await supabase.rpc('check_has_voted', {
-          p_reg_no: storedRegNo,
-          p_election_id: targetElectionId,
-        });
-
-        if (checkError) throw checkError;
-
-        if (hasVoted) {
-          setAlreadyVotedThisRole(true);
-          setCheckingEligibility(false);
-          return;
-        }
-
-        // 2. Fetch target election details
+        // 1. Fetch target election details
         const { data: election, error: electionError } = await supabase
           .from('elections')
           .select('id, title, is_active')
@@ -95,7 +86,7 @@ function VotingArenaContent() {
 
         setElectionTitle(election.title);
 
-        // 3. Fetch candidates
+        // 2. Fetch candidates
         const { data: candidatesList, error: candidatesError } = await supabase
           .from('candidates')
           .select('id, name, votes_count')
@@ -103,8 +94,21 @@ function VotingArenaContent() {
           .order('name', { ascending: true });
 
         if (candidatesError) throw candidatesError;
-
         setCandidates(candidatesList || []);
+
+        // 3. Check if user has ALREADY voted for this role & get candidate choice
+        const { data: voteInfo, error: voteCheckError } = await supabase.rpc('get_user_vote_for_election', {
+          p_reg_no: storedRegNo,
+          p_election_id: targetElectionId,
+        });
+
+        if (voteCheckError) throw voteCheckError;
+
+        if (voteInfo && voteInfo.length > 0 && voteInfo[0].has_voted) {
+          setHasVotedRole(true);
+          setVotedCandidateId(voteInfo[0].candidate_id);
+          setVotedCandidateName(voteInfo[0].candidate_name);
+        }
       } catch (err: any) {
         console.error('Error verifying voter session:', err);
         setErrorMsg('Error loading voting ballot. Please return to portal.');
@@ -116,7 +120,7 @@ function VotingArenaContent() {
     verifyVoterSession();
   }, [router, targetElectionId]);
 
-  // Realtime listener for live vote counts
+  // Realtime listener for live vote count updates
   useEffect(() => {
     if (!targetElectionId) return;
 
@@ -152,12 +156,13 @@ function VotingArenaContent() {
   }, [targetElectionId]);
 
   const handleCastVote = async () => {
-    if (!selectedCandidateId || !targetElectionId || !voterName || !voterRegNo) return;
+    if (hasVotedRole || !selectedCandidateId || !targetElectionId || !voterName || !voterRegNo) return;
     
     setIsSubmittingVote(true);
     setErrorMsg(null);
 
-    const selectedCandidateName = candidates.find(c => c.id === selectedCandidateId)?.name || 'Candidate';
+    const selectedCand = candidates.find(c => c.id === selectedCandidateId);
+    const selectedCandidateName = selectedCand?.name || 'Candidate';
 
     try {
       const { error } = await supabase
@@ -176,8 +181,16 @@ function VotingArenaContent() {
         throw error;
       }
 
-      setVotedForName(selectedCandidateName);
-      setVoteSuccess(true);
+      // Mark as voted in UI state without leaving page
+      setHasVotedRole(true);
+      setVotedCandidateId(selectedCandidateId);
+      setVotedCandidateName(selectedCandidateName);
+      setJustVotedSuccessMsg(`Your vote for ${selectedCandidateName} has been recorded! Live counts update in real-time below.`);
+
+      // Update candidate counts locally for immediate UI response
+      setCandidates((prev) =>
+        prev.map((c) => (c.id === selectedCandidateId ? { ...c, votes_count: c.votes_count + 1 } : c))
+      );
     } catch (err: any) {
       console.error('Error submitting vote:', err);
       setErrorMsg(err.message || 'Failed to submit vote. Please try again.');
@@ -186,116 +199,19 @@ function VotingArenaContent() {
     }
   };
 
-  const handleBackToPortal = () => {
-    router.push('/user/portal');
-  };
-
   const handleExit = () => {
     sessionStorage.clear();
     router.push('/');
   };
 
-  const totalVotesCast = candidates.reduce((acc, curr) => acc + curr.votes_count, 0);
-  const remainingVoters = Math.max(0, TOTAL_ELIGIBLE_VOTERS - totalVotesCast);
+  const totalVotesCastForRole = candidates.reduce((acc, curr) => acc + curr.votes_count, 0);
+  const remainingVoters = Math.max(0, TOTAL_ELIGIBLE_VOTERS - totalVotesCastForRole);
 
   if (checkingEligibility) {
     return (
       <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-slate-100">
         <Loader2 className="w-12 h-12 text-emerald-500 animate-spin mb-4" />
         <p className="text-slate-400">Loading voting ballot...</p>
-      </div>
-    );
-  }
-
-  // Already Voted this Role UI
-  if (alreadyVotedThisRole) {
-    return (
-      <div className="relative min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-between overflow-hidden">
-        <header className="border-b border-slate-900/80 bg-slate-900/50 backdrop-blur-md z-10">
-          <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
-            <Link href="/user/portal" className="flex items-center gap-2 text-slate-400 hover:text-white transition-colors text-sm">
-              <ArrowLeft className="w-4 h-4" /> Back to Elections Portal
-            </Link>
-            <span className="text-sm font-semibold text-slate-200 uppercase tracking-wider">SRM VEC AI & DS</span>
-          </div>
-        </header>
-
-        <main className="flex-grow flex items-center justify-center p-6 z-10">
-          <div className="w-full max-w-md bg-slate-900/60 border border-slate-800 rounded-2xl p-8 text-center space-y-6 shadow-[0_0_50px_-12px_rgba(239,68,68,0.1)]">
-            <div className="inline-flex bg-red-500/10 border border-red-500/20 w-16 h-16 rounded-full items-center justify-center text-red-400 mb-2">
-              <AlertTriangle className="w-8 h-8" />
-            </div>
-            <div className="space-y-2">
-              <h1 className="text-2xl font-bold text-white">Ballot Already Submitted</h1>
-              <p className="text-slate-400 text-sm leading-relaxed mt-4">
-                You have already cast your vote for this election post under Register Number <span className="font-mono text-white">{voterRegNo}</span>.
-              </p>
-            </div>
-            <div className="pt-4">
-              <button
-                onClick={handleBackToPortal}
-                className="w-full bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 hover:to-emerald-400 text-white font-semibold py-3 px-4 rounded-xl transition-all text-sm"
-              >
-                Return to Elections Portal
-              </button>
-            </div>
-          </div>
-        </main>
-
-        <footer className="py-6 text-center text-xs text-slate-600 z-10 border-t border-slate-900/60">
-          <p>© 2026 SRM Valliammai Engineering College. AI & DS Symposium</p>
-        </footer>
-      </div>
-    );
-  }
-
-  // Success UI
-  if (voteSuccess) {
-    return (
-      <div className="relative min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-between overflow-hidden">
-        <div className="absolute top-0 right-1/4 w-96 h-96 bg-emerald-500/5 rounded-full blur-3xl pointer-events-none" />
-
-        <header className="border-b border-slate-900 bg-slate-900/30 backdrop-blur-md">
-          <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
-            <span className="text-sm font-semibold tracking-wider text-slate-400 uppercase">SRM Valliammai Engineering College</span>
-            <span className="text-xs px-2.5 py-0.5 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 font-semibold rounded">Ballot Cast</span>
-          </div>
-        </header>
-
-        <main className="flex-grow flex items-center justify-center p-6 z-10">
-          <div className="w-full max-w-md bg-slate-900/60 border border-slate-800 rounded-2xl p-8 text-center space-y-6 shadow-[0_0_50px_-12px_rgba(16,185,129,0.15)]">
-            <div className="inline-flex bg-emerald-500/10 border border-emerald-500/20 w-16 h-16 rounded-full items-center justify-center text-emerald-400 mb-2 animate-bounce">
-              <CheckCircle2 className="w-8 h-8" />
-            </div>
-            
-            <div className="space-y-2">
-              <h1 className="text-2xl font-bold text-white">Vote Recorded!</h1>
-              <p className="text-slate-400 text-sm leading-relaxed">
-                Your vote for <span className="font-semibold text-emerald-400">{votedForName}</span> in <span className="text-white italic">"{electionTitle}"</span> has been securely transmitted.
-              </p>
-            </div>
-
-            <div className="p-4 bg-slate-950/80 border border-slate-900 rounded-xl text-left text-xs text-slate-500 space-y-1 font-mono">
-              <p>Voter Name: {voterName}</p>
-              <p>Reg Number: {voterRegNo}</p>
-              <p>Election Role: {electionTitle}</p>
-              <p>Status: CONFIRMED</p>
-            </div>
-
-            <div className="pt-4 space-y-3">
-              <button
-                onClick={handleBackToPortal}
-                className="w-full bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 hover:to-emerald-400 text-white font-semibold py-3.5 px-4 rounded-xl transition-all shadow-lg shadow-emerald-600/20 text-sm flex items-center justify-center gap-2"
-              >
-                <ArrowLeft className="w-4 h-4" /> Back to Elections Portal
-              </button>
-            </div>
-          </div>
-        </main>
-
-        <footer className="py-6 text-center text-xs text-slate-600 z-10 border-t border-slate-900/60">
-          <p>© 2026 SRM Valliammai Engineering College. AI & DS Department</p>
-        </footer>
       </div>
     );
   }
@@ -310,13 +226,12 @@ function VotingArenaContent() {
       <header className="border-b border-slate-900 bg-slate-900/30 backdrop-blur-md sticky top-0 z-30">
         <div className="max-w-7xl mx-auto px-6 py-4 flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <Link href="/user/portal" className="p-2 bg-slate-900 border border-slate-800 hover:bg-slate-800 rounded-xl text-slate-400 hover:text-white transition-colors">
-              <ArrowLeft className="w-4 h-4" />
+            <Link 
+              href="/user/portal" 
+              className="flex items-center gap-2 px-3 py-2 bg-slate-900 border border-slate-800 hover:bg-slate-800 rounded-xl text-slate-300 hover:text-white transition-colors text-xs font-semibold"
+            >
+              <ArrowLeft className="w-4 h-4" /> Back to Elections Portal
             </Link>
-            <div>
-              <span className="text-[10px] text-slate-500 font-mono block uppercase">SRM Valliammai AI & DS</span>
-              <span className="text-xs font-semibold text-slate-200">Election Role Terminal</span>
-            </div>
           </div>
 
           <div className="flex items-center gap-4">
@@ -352,6 +267,23 @@ function VotingArenaContent() {
           </div>
         )}
 
+        {/* Post-submission or Re-entry Banner */}
+        {hasVotedRole && (
+          <div className="p-5 bg-emerald-500/10 border border-emerald-500/30 rounded-2xl text-center space-y-2 max-w-2xl mx-auto w-full shadow-[0_0_30px_-5px_rgba(16,185,129,0.15)]">
+            <div className="inline-flex items-center justify-center gap-2 text-emerald-400 font-bold text-base">
+              <CheckCircle2 className="w-5 h-5" />
+              <span>Ballot Recorded for "{electionTitle}"</span>
+            </div>
+            <p className="text-xs text-slate-300 leading-relaxed">
+              {justVotedSuccessMsg || (
+                <>
+                  You cast your vote for <span className="font-semibold text-emerald-400">{votedCandidateName}</span>. Live vote counts update in real-time below out of {TOTAL_ELIGIBLE_VOTERS} total department voters.
+                </>
+              )}
+            </p>
+          </div>
+        )}
+
         {!errorMsg && (
           <div className="space-y-8">
             {/* Title / Role header */}
@@ -363,7 +295,9 @@ function VotingArenaContent() {
                 Role: {electionTitle}
               </h1>
               <p className="text-slate-400 text-sm md:text-base max-w-xl mx-auto">
-                Select your candidate choice below. Live vote counts update continuously in real-time.
+                {hasVotedRole
+                  ? 'Observing live real-time candidate standings below.'
+                  : 'Select your candidate choice below. Live vote counts update continuously in real-time.'}
               </p>
             </div>
 
@@ -383,7 +317,7 @@ function VotingArenaContent() {
                   <Award className="w-3 h-3 text-emerald-400" /> Role Votes
                 </span>
                 <span className="text-xl md:text-2xl font-bold text-emerald-400 block">
-                  {totalVotesCast}
+                  {totalVotesCastForRole}
                 </span>
               </div>
 
@@ -401,46 +335,60 @@ function VotingArenaContent() {
             <div className="grid md:grid-cols-2 gap-6 max-w-3xl mx-auto pt-2">
               {candidates.map((cand) => {
                 const isSelected = selectedCandidateId === cand.id;
-                const percentage = totalVotesCast > 0 ? Math.round((cand.votes_count / totalVotesCast) * 100) : 0;
+                const isVotedChoice = votedCandidateId === cand.id;
+                
+                // Explicit calculation out of 59 total department voters
+                const percentage = Number(((cand.votes_count / TOTAL_ELIGIBLE_VOTERS) * 100).toFixed(1));
                 
                 return (
                   <button
                     key={cand.id}
+                    disabled={hasVotedRole}
                     onClick={() => setSelectedCandidateId(cand.id)}
                     className={`group relative text-left bg-slate-900/60 border rounded-2xl p-6 transition-all duration-300 flex flex-col justify-between gap-5 overflow-hidden ${
-                      isSelected 
+                      isVotedChoice
+                        ? 'border-emerald-500 shadow-[0_0_30px_-5px_rgba(16,185,129,0.25)] bg-slate-900/90'
+                        : isSelected 
                         ? 'border-emerald-500 shadow-[0_0_25px_-5px_rgba(16,185,129,0.15)] bg-slate-900/90' 
-                        : 'border-slate-800 hover:border-slate-700 hover:bg-slate-900/70'
+                        : 'border-slate-800 hover:border-slate-700 hover:bg-slate-900/70 disabled:hover:border-slate-800 disabled:hover:bg-slate-900/60'
                     }`}
                   >
-                    <div className={`absolute top-0 right-0 w-24 h-24 bg-emerald-500/5 rounded-full blur-2xl transition-opacity duration-300 ${isSelected ? 'opacity-100' : 'opacity-0'}`} />
+                    <div className={`absolute top-0 right-0 w-24 h-24 bg-emerald-500/5 rounded-full blur-2xl transition-opacity duration-300 ${isSelected || isVotedChoice ? 'opacity-100' : 'opacity-0'}`} />
 
                     <div className="space-y-2">
                       <div className="flex items-center justify-between">
                         <h3 className="text-xl font-bold text-white group-hover:text-emerald-400 transition-colors">
                           {cand.name}
                         </h3>
-                        <div className={`w-5 h-5 rounded-full border flex items-center justify-center transition-colors ${
-                          isSelected 
-                            ? 'border-emerald-500 bg-emerald-500 text-slate-950' 
-                            : 'border-slate-700 group-hover:border-slate-500'
-                        }`}>
-                          {isSelected && <CheckCircle2 className="w-4 h-4 text-slate-950 stroke-[3]" />}
-                        </div>
+                        {isVotedChoice ? (
+                          <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 font-bold rounded-full uppercase">
+                            Your Choice ✓
+                          </span>
+                        ) : (
+                          <div className={`w-5 h-5 rounded-full border flex items-center justify-center transition-colors ${
+                            isSelected 
+                              ? 'border-emerald-500 bg-emerald-500 text-slate-950' 
+                              : 'border-slate-700 group-hover:border-slate-500'
+                          }`}>
+                            {isSelected && <CheckCircle2 className="w-4 h-4 text-slate-950 stroke-[3]" />}
+                          </div>
+                        )}
                       </div>
                       <p className="text-xs text-slate-500">Department of AI & DS Candidate</p>
                     </div>
 
-                    {/* Real-time stats display per candidate */}
+                    {/* Real-time stats display out of 59 voters */}
                     <div className="space-y-1.5 pt-2">
-                      <div className="flex justify-between text-xs font-semibold">
+                      <div className="flex justify-between items-center text-xs font-semibold">
                         <span className="text-slate-500">Live Standing</span>
-                        <span className="text-emerald-400 font-bold">{cand.votes_count} {cand.votes_count === 1 ? 'vote' : 'votes'} ({percentage}%)</span>
+                        <span className="text-emerald-400 font-mono font-bold">
+                          {cand.votes_count} / {TOTAL_ELIGIBLE_VOTERS} votes ({percentage}%)
+                        </span>
                       </div>
-                      <div className="h-2 w-full bg-slate-950 rounded-full overflow-hidden">
+                      <div className="h-2.5 w-full bg-slate-950 rounded-full overflow-hidden border border-slate-900">
                         <div 
                           className="h-full bg-gradient-to-r from-emerald-500 to-indigo-500 transition-all duration-500" 
-                          style={{ width: `${percentage}%` }}
+                          style={{ width: `${Math.min(100, (cand.votes_count / TOTAL_ELIGIBLE_VOTERS) * 100)}%` }}
                         />
                       </div>
                     </div>
@@ -449,26 +397,45 @@ function VotingArenaContent() {
               })}
             </div>
 
-            {/* Voting Submission actions */}
+            {/* Voting Submission & Navigation Actions */}
             <div className="max-w-md mx-auto pt-4 text-center space-y-4">
-              <button
-                onClick={handleCastVote}
-                disabled={!selectedCandidateId || isSubmittingVote}
-                className="w-full bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 hover:to-emerald-400 text-white font-bold py-4 px-6 rounded-xl transition-all shadow-lg shadow-emerald-600/35 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 text-base uppercase tracking-wider"
-              >
-                {isSubmittingVote ? (
-                  <>
-                    <Loader2 className="w-5 h-5 animate-spin" /> Casting Ballot...
-                  </>
-                ) : (
-                  <>
-                    <Vote className="w-5 h-5" /> Submit Ballot for {electionTitle}
-                  </>
-                )}
-              </button>
-              <p className="text-[10px] text-slate-600 leading-normal">
-                By submitting this ballot, you confirm that you are Register Number <span className="font-mono">{voterRegNo}</span>. Your vote is secret and locked for this role post.
-              </p>
+              {hasVotedRole ? (
+                <div className="space-y-3">
+                  <button
+                    disabled
+                    className="w-full bg-slate-900 border border-slate-800 text-emerald-400 font-bold py-4 px-6 rounded-xl text-sm uppercase tracking-wider flex items-center justify-center gap-2 cursor-not-allowed opacity-90"
+                  >
+                    <CheckCircle2 className="w-5 h-5 text-emerald-500" /> Ballot Submitted for {electionTitle}
+                  </button>
+                  <Link
+                    href="/user/portal"
+                    className="inline-flex items-center gap-2 text-xs text-slate-400 hover:text-white transition-colors"
+                  >
+                    <ArrowLeft className="w-3.5 h-3.5" /> Return to Elections Portal Hub
+                  </Link>
+                </div>
+              ) : (
+                <>
+                  <button
+                    onClick={handleCastVote}
+                    disabled={!selectedCandidateId || isSubmittingVote}
+                    className="w-full bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-500 hover:to-emerald-400 text-white font-bold py-4 px-6 rounded-xl transition-all shadow-lg shadow-emerald-600/35 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 text-base uppercase tracking-wider"
+                  >
+                    {isSubmittingVote ? (
+                      <>
+                        <Loader2 className="w-5 h-5 animate-spin" /> Casting Ballot...
+                      </>
+                    ) : (
+                      <>
+                        <Vote className="w-5 h-5" /> Submit Ballot for {electionTitle}
+                      </>
+                    )}
+                  </button>
+                  <p className="text-[10px] text-slate-600 leading-normal">
+                    By submitting this ballot, you confirm that you are Register Number <span className="font-mono">{voterRegNo}</span>. Your vote is secret and locked for this role post.
+                  </p>
+                </>
+              )}
             </div>
           </div>
         )}

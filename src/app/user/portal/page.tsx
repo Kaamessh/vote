@@ -13,7 +13,8 @@ import {
   LogOut, 
   ChevronRight, 
   Sparkles,
-  Award
+  Award,
+  Eye
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -153,7 +154,7 @@ export default function UserPortal() {
             Active Role Elections
           </h1>
           <p className="text-slate-400 text-sm md:text-base max-w-xl mx-auto">
-            You are eligible to vote once for each of the active roles below. Select an election to enter its voting arena.
+            You are eligible to vote once for each active role below. Click any election to enter its live arena or view real-time standings.
           </p>
         </div>
 
@@ -185,7 +186,7 @@ export default function UserPortal() {
             </div>
             <h3 className="text-xl font-bold text-white">All Elections Completed!</h3>
             <p className="text-xs text-slate-400 leading-relaxed">
-              Thank you, {voterName}! You have successfully submitted secret ballots for all active election posts in the AI & DS Symposium.
+              Thank you, {voterName}! You have submitted secret ballots for all active election posts. You can still re-enter any election below to observe real-time vote updates live.
             </p>
           </div>
         )}
@@ -198,7 +199,7 @@ export default function UserPortal() {
                 key={election.election_id}
                 className={`group relative bg-slate-900/60 border rounded-2xl p-6 backdrop-blur-sm transition-all duration-300 flex flex-col justify-between gap-6 overflow-hidden ${
                   election.has_voted 
-                    ? 'border-slate-800/80 bg-slate-900/40 opacity-90' 
+                    ? 'border-emerald-500/40 bg-slate-900/80 hover:border-emerald-500/70' 
                     : 'border-slate-800 hover:border-emerald-500/50 hover:shadow-[0_0_30px_-5px_rgba(16,185,129,0.15)]'
                 }`}
               >
@@ -220,19 +221,19 @@ export default function UserPortal() {
                   </h2>
                   <p className="text-xs text-slate-400 leading-relaxed">
                     {election.has_voted 
-                      ? 'Your vote has been cast and locked for this role.' 
+                      ? 'Your vote is recorded. Click below to view live candidate standings.' 
                       : 'Cast your vote securely for candidate standing in this role.'}
                   </p>
                 </div>
 
                 <div>
                   {election.has_voted ? (
-                    <button
-                      disabled
-                      className="w-full bg-slate-950 border border-slate-800/80 text-slate-500 font-semibold py-3 px-4 rounded-xl text-xs flex items-center justify-center gap-1.5 cursor-not-allowed"
+                    <Link
+                      href={`/user/vote?electionId=${election.election_id}`}
+                      className="w-full bg-slate-900 border border-slate-700 hover:bg-slate-800 text-emerald-400 font-semibold py-3 px-4 rounded-xl text-xs flex items-center justify-center gap-1.5 transition-all group-hover:translate-x-0.5"
                     >
-                      <CheckCircle2 className="w-4 h-4 text-emerald-500" /> Ballot Submitted
-                    </button>
+                      <Eye className="w-4 h-4 text-emerald-400" /> View Live Standings <ChevronRight className="w-4 h-4 ml-auto" />
+                    </Link>
                   ) : (
                     <Link
                       href={`/user/vote?electionId=${election.election_id}`}
