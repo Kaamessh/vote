@@ -14,7 +14,8 @@ import {
   ChevronRight, 
   Sparkles,
   Award,
-  Eye
+  Eye,
+  ShieldAlert
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -48,10 +49,11 @@ export default function UserPortal() {
     }
   }, []);
 
-  // Verify session and initial load
+  // Verify session & device lock ownership
   useEffect(() => {
     const storedName = sessionStorage.getItem('voter_name');
     const storedRegNo = sessionStorage.getItem('voter_reg_no');
+    const localDeviceId = localStorage.getItem('voter_device_id');
 
     if (!storedName || !storedRegNo) {
       router.replace('/user/login');
@@ -60,27 +62,69 @@ export default function UserPortal() {
 
     setVoterName(storedName);
     setVoterRegNo(storedRegNo);
-    fetchPortalData(storedRegNo);
+
+    // Verify active device lock
+    const verifyDeviceOwnership = async () => {
+      const { data, error } = await supabase
+        .from('voter_sessions')
+        .select('device_id')
+        .eq('voter_reg_no', storedRegNo)
+        .maybeSingle();
+
+      if (!error && data && localDeviceId && data.device_id !== localDeviceId) {
+        alert(`Security Alert: Register Number ${storedRegNo} is logged in on another device.`);
+        sessionStorage.clear();
+        router.replace('/user/login');
+        return;
+      }
+
+      fetchPortalData(storedRegNo);
+    };
+
+    verifyDeviceOwnership();
   }, [router, fetchPortalData]);
 
-  // Realtime subscription for live election additions & vote updates
+  // Realtime subscription for live election additions, vote updates & device lock kickouts
   useEffect(() => {
     if (!voterRegNo) return;
+    const localDeviceId = localStorage.getItem('voter_device_id');
 
     const channel = supabase
-      .channel('user-portal-changes')
+      .channel(`user-portal-realtime-${voterRegNo}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'elections' }, () => {
         fetchPortalData(voterRegNo);
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'votes' }, () => {
         fetchPortalData(voterRegNo);
       })
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'voter_sessions',
+          filter: `voter_reg_no=eq.${voterRegNo}`,
+        },
+        (payload: any) => {
+          if (payload.eventType === 'UPDATE' || payload.eventType === 'INSERT') {
+            if (localDeviceId && payload.new?.device_id !== localDeviceId) {
+              alert(`Register Number ${voterRegNo} has been accessed on another device. Logging out.`);
+              sessionStorage.clear();
+              router.replace('/user/login');
+            }
+          } else if (payload.eventType === 'DELETE') {
+            alert(`Your device lock for Register Number ${voterRegNo} was reset by Admin.`);
+            sessionStorage.clear();
+            router.replace('/user/login');
+          }
+        }
+      )
       .subscribe();
 
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [voterRegNo, fetchPortalData]);
+  }, [voterRegNo, fetchPortalData, router]);
 
   const handleExit = () => {
     sessionStorage.clear();
