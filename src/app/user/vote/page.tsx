@@ -214,7 +214,35 @@ function VotingArenaContent() {
   const highestVotes = sortedCandidatesByVotes[0]?.votes_count || 0;
   const secondHighestVotes = sortedCandidatesByVotes[1]?.votes_count || 0;
   const isCompleted = totalVotesCastForRole >= totalVotersCap && totalVotersCap > 0;
+  
+  const topCandidates = candidates.filter((c) => c.votes_count === highestVotes && highestVotes > 0);
+  const isTieForFirst = topCandidates.length > 1;
+  const winnerNames = topCandidates.map((c) => c.name).join(' & ');
   const winnerCandidate = sortedCandidatesByVotes[0];
+
+  const getRankLabel = (cand: Candidate, idx: number) => {
+    if (cand.votes_count === 0 && totalVotesCastForRole === 0) {
+      return `${idx + 1}th Place`;
+    }
+    
+    if (cand.votes_count === highestVotes && highestVotes > 0) {
+      if (isTieForFirst) {
+        return '🥇 Tied 1st Place';
+      }
+      return '🥇 1st Place';
+    }
+    
+    const higherVoteCountCandidates = candidates.filter((c) => c.votes_count > cand.votes_count);
+    const rankNumber = higherVoteCountCandidates.length + 1;
+    const sameVoteCountCandidates = candidates.filter((c) => c.votes_count === cand.votes_count);
+    const isTiedAtThisRank = sameVoteCountCandidates.length > 1;
+
+    const medalPrefix = rankNumber === 2 ? '🥈' : rankNumber === 3 ? '🥉' : '🎗️';
+    const tiePrefix = isTiedAtThisRank ? 'Tied ' : '';
+    const suffix = rankNumber === 2 ? 'nd' : rankNumber === 3 ? 'rd' : 'th';
+
+    return `${medalPrefix} ${tiePrefix}${rankNumber}${suffix} Place`;
+  };
 
   const getMarginBadge = (cand: Candidate) => {
     if (totalVotesCastForRole === 0) return null;
@@ -340,18 +368,22 @@ function VotingArenaContent() {
         )}
 
         {/* Winner & Final Rankings Banner when Completed */}
-        {isCompleted && winnerCandidate && (
+        {isCompleted && (
           <div className="p-6 bg-gradient-to-r from-amber-500/10 via-amber-500/5 to-slate-900 border border-amber-500/30 rounded-2xl space-y-4 max-w-2xl mx-auto w-full shadow-[0_0_30px_-5px_rgba(245,158,11,0.15)]">
             <div className="flex items-center gap-3">
               <div className="bg-amber-500/20 p-3 rounded-xl text-amber-400">
                 <Trophy className="w-7 h-7" />
               </div>
               <div>
-                <span className="text-xs text-amber-400 font-bold uppercase tracking-wider block">Official Election Winner</span>
-                <h2 className="text-2xl font-extrabold text-white">🏆 {winnerCandidate.name}</h2>
+                <span className="text-xs text-amber-400 font-bold uppercase tracking-wider block">
+                  {isTieForFirst ? 'Official Result (Tied for 1st Place)' : 'Official Election Winner'}
+                </span>
+                <h2 className="text-2xl font-extrabold text-white">
+                  {isTieForFirst ? `🤝 Joint Winners: ${winnerNames}` : `🏆 ${winnerCandidate?.name}`}
+                </h2>
               </div>
               <span className="ml-auto text-xs px-3 py-1 bg-amber-500/20 border border-amber-500/40 text-amber-300 font-bold rounded-full">
-                {winnerCandidate.votes_count} / {totalVotersCap} votes
+                {isTieForFirst ? `${highestVotes} / ${totalVotersCap} votes each` : `${winnerCandidate?.votes_count} / ${totalVotersCap} votes`}
               </span>
             </div>
 
@@ -359,11 +391,11 @@ function VotingArenaContent() {
               <span className="text-[10px] text-slate-400 uppercase font-semibold block">Final Standings & Rankings</span>
               <div className="grid gap-2">
                 {sortedCandidatesByVotes.map((cand, rankIdx) => {
-                  const medal = rankIdx === 0 ? '🥇 1st Place' : rankIdx === 1 ? '🥈 2nd Place' : rankIdx === 2 ? '🥉 3rd Place' : `${rankIdx + 1}th Place`;
+                  const medalLabel = getRankLabel(cand, rankIdx);
                   const pct = Number(((cand.votes_count / totalVotersCap) * 100).toFixed(1));
                   return (
                     <div key={cand.id} className="flex justify-between items-center bg-slate-950/80 px-3.5 py-2 rounded-xl border border-slate-900 text-xs">
-                      <span className="font-bold text-amber-400">{medal}: <span className="text-white font-semibold">{cand.name}</span></span>
+                      <span className="font-bold text-amber-400">{medalLabel}: <span className="text-white font-semibold">{cand.name}</span></span>
                       <span className="font-mono text-slate-300">{cand.votes_count} / {totalVotersCap} votes ({pct}%)</span>
                     </div>
                   );
