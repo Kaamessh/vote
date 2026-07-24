@@ -3,7 +3,6 @@
 import React, { useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
-import { TOTAL_ELIGIBLE_VOTERS } from '@/lib/validation';
 import { 
   Vote, 
   User, 
@@ -18,7 +17,9 @@ import {
   Clock,
   Award,
   ArrowLeft,
-  Eye
+  Crown,
+  TrendingDown,
+  Trophy
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -36,6 +37,7 @@ function VotingArenaContent() {
   const [voterName, setVoterName] = useState<string | null>(null);
   const [voterRegNo, setVoterRegNo] = useState<string | null>(null);
   const [electionTitle, setElectionTitle] = useState<string | null>(null);
+  const [totalVotersCap, setTotalVotersCap] = useState<number>(59);
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   
   const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null);
@@ -72,7 +74,7 @@ function VotingArenaContent() {
         // 1. Fetch target election details
         const { data: election, error: electionError } = await supabase
           .from('elections')
-          .select('id, title, is_active')
+          .select('id, title, total_voters, is_active')
           .eq('id', targetElectionId)
           .maybeSingle();
 
@@ -85,6 +87,7 @@ function VotingArenaContent() {
         }
 
         setElectionTitle(election.title);
+        setTotalVotersCap(election.total_voters || 59);
 
         // 2. Fetch candidates
         const { data: candidatesList, error: candidatesError } = await supabase
@@ -181,13 +184,11 @@ function VotingArenaContent() {
         throw error;
       }
 
-      // Mark as voted in UI state without leaving page
       setHasVotedRole(true);
       setVotedCandidateId(selectedCandidateId);
       setVotedCandidateName(selectedCandidateName);
       setJustVotedSuccessMsg(`Your vote for ${selectedCandidateName} has been recorded! Live counts update in real-time below.`);
 
-      // Update candidate counts locally for immediate UI response
       setCandidates((prev) =>
         prev.map((c) => (c.id === selectedCandidateId ? { ...c, votes_count: c.votes_count + 1 } : c))
       );
@@ -205,7 +206,42 @@ function VotingArenaContent() {
   };
 
   const totalVotesCastForRole = candidates.reduce((acc, curr) => acc + curr.votes_count, 0);
-  const remainingVoters = Math.max(0, TOTAL_ELIGIBLE_VOTERS - totalVotesCastForRole);
+  const remainingVoters = Math.max(0, totalVotersCap - totalVotesCastForRole);
+
+  // Real-time Leading & Trailing Margins Formula
+  const sortedCandidatesByVotes = [...candidates].sort((a, b) => b.votes_count - a.votes_count);
+  const highestVotes = sortedCandidatesByVotes[0]?.votes_count || 0;
+  const secondHighestVotes = sortedCandidatesByVotes[1]?.votes_count || 0;
+  const isCompleted = totalVotesCastForRole >= totalVotersCap && totalVotersCap > 0;
+  const winnerCandidate = sortedCandidatesByVotes[0];
+
+  const getMarginBadge = (cand: Candidate) => {
+    if (totalVotesCastForRole === 0) return null;
+
+    if (cand.votes_count === highestVotes && highestVotes > 0) {
+      if (highestVotes === secondHighestVotes) {
+        return (
+          <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 bg-amber-500/10 border border-amber-500/30 text-amber-400 font-bold rounded-full">
+            <Crown className="w-3 h-3 text-amber-400" /> Tied for 1st
+          </span>
+        );
+      }
+      const margin = highestVotes - secondHighestVotes;
+      return (
+        <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 font-bold rounded-full">
+          <Crown className="w-3 h-3 text-emerald-400" /> Leading by {margin} {margin === 1 ? 'vote' : 'votes'}
+        </span>
+      );
+    } else if (highestVotes > 0) {
+      const trailing = highestVotes - cand.votes_count;
+      return (
+        <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 bg-rose-500/10 border border-rose-500/30 text-rose-400 font-semibold rounded-full">
+          <TrendingDown className="w-3 h-3 text-rose-400" /> Trailing by {trailing} {trailing === 1 ? 'vote' : 'votes'}
+        </span>
+      );
+    }
+    return null;
+  };
 
   if (checkingEligibility) {
     return (
@@ -277,10 +313,44 @@ function VotingArenaContent() {
             <p className="text-xs text-slate-300 leading-relaxed">
               {justVotedSuccessMsg || (
                 <>
-                  You cast your vote for <span className="font-semibold text-emerald-400">{votedCandidateName}</span>. Live vote counts update in real-time below out of {TOTAL_ELIGIBLE_VOTERS} total department voters.
+                  You cast your vote for <span className="font-semibold text-emerald-400">{votedCandidateName}</span>. Live vote counts update in real-time below out of {totalVotersCap} total department voters.
                 </>
               )}
             </p>
+          </div>
+        )}
+
+        {/* Winner & Final Rankings Banner when Completed */}
+        {isCompleted && winnerCandidate && (
+          <div className="p-6 bg-gradient-to-r from-amber-500/10 via-amber-500/5 to-slate-900 border border-amber-500/30 rounded-2xl space-y-4 max-w-2xl mx-auto w-full shadow-[0_0_30px_-5px_rgba(245,158,11,0.15)]">
+            <div className="flex items-center gap-3">
+              <div className="bg-amber-500/20 p-3 rounded-xl text-amber-400">
+                <Trophy className="w-7 h-7" />
+              </div>
+              <div>
+                <span className="text-xs text-amber-400 font-bold uppercase tracking-wider block">Official Election Winner</span>
+                <h2 className="text-2xl font-extrabold text-white">🏆 {winnerCandidate.name}</h2>
+              </div>
+              <span className="ml-auto text-xs px-3 py-1 bg-amber-500/20 border border-amber-500/40 text-amber-300 font-bold rounded-full">
+                {winnerCandidate.votes_count} / {totalVotersCap} votes
+              </span>
+            </div>
+
+            <div className="pt-2 border-t border-amber-500/20 space-y-2">
+              <span className="text-[10px] text-slate-400 uppercase font-semibold block">Final Standings & Rankings</span>
+              <div className="grid gap-2">
+                {sortedCandidatesByVotes.map((cand, rankIdx) => {
+                  const medal = rankIdx === 0 ? '🥇 1st Place' : rankIdx === 1 ? '🥈 2nd Place' : rankIdx === 2 ? '🥉 3rd Place' : `${rankIdx + 1}th Place`;
+                  const pct = Number(((cand.votes_count / totalVotersCap) * 100).toFixed(1));
+                  return (
+                    <div key={cand.id} className="flex justify-between items-center bg-slate-950/80 px-3.5 py-2 rounded-xl border border-slate-900 text-xs">
+                      <span className="font-bold text-amber-400">{medal}: <span className="text-white font-semibold">{cand.name}</span></span>
+                      <span className="font-mono text-slate-300">{cand.votes_count} / {totalVotersCap} votes ({pct}%)</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
           </div>
         )}
 
@@ -301,14 +371,14 @@ function VotingArenaContent() {
               </p>
             </div>
 
-            {/* Voter Turnout Summary Banner */}
+            {/* Dynamic Voter Turnout Summary Banner */}
             <div className="grid grid-cols-3 gap-4 max-w-2xl mx-auto bg-slate-900/60 border border-slate-800 rounded-2xl p-4 text-center backdrop-blur-sm">
               <div className="space-y-1">
                 <span className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider block flex items-center justify-center gap-1">
                   <Users className="w-3 h-3 text-indigo-400" /> Total Voters
                 </span>
                 <span className="text-xl md:text-2xl font-bold text-white block">
-                  {TOTAL_ELIGIBLE_VOTERS}
+                  {totalVotersCap}
                 </span>
               </div>
 
@@ -337,8 +407,8 @@ function VotingArenaContent() {
                 const isSelected = selectedCandidateId === cand.id;
                 const isVotedChoice = votedCandidateId === cand.id;
                 
-                // Explicit calculation out of 59 total department voters
-                const percentage = Number(((cand.votes_count / TOTAL_ELIGIBLE_VOTERS) * 100).toFixed(1));
+                // Dynamic percentage out of totalVotersCap
+                const percentage = Number(((cand.votes_count / totalVotersCap) * 100).toFixed(1));
                 
                 return (
                   <button
@@ -356,16 +426,19 @@ function VotingArenaContent() {
                     <div className={`absolute top-0 right-0 w-24 h-24 bg-emerald-500/5 rounded-full blur-2xl transition-opacity duration-300 ${isSelected || isVotedChoice ? 'opacity-100' : 'opacity-0'}`} />
 
                     <div className="space-y-2">
-                      <div className="flex items-center justify-between">
-                        <h3 className="text-xl font-bold text-white group-hover:text-emerald-400 transition-colors">
-                          {cand.name}
-                        </h3>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <h3 className="text-xl font-bold text-white group-hover:text-emerald-400 transition-colors">
+                            {cand.name}
+                          </h3>
+                        </div>
+
                         {isVotedChoice ? (
-                          <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 font-bold rounded-full uppercase">
+                          <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 font-bold rounded-full uppercase shrink-0">
                             Your Choice ✓
                           </span>
                         ) : (
-                          <div className={`w-5 h-5 rounded-full border flex items-center justify-center transition-colors ${
+                          <div className={`w-5 h-5 rounded-full border flex items-center justify-center transition-colors shrink-0 ${
                             isSelected 
                               ? 'border-emerald-500 bg-emerald-500 text-slate-950' 
                               : 'border-slate-700 group-hover:border-slate-500'
@@ -374,21 +447,25 @@ function VotingArenaContent() {
                           </div>
                         )}
                       </div>
-                      <p className="text-xs text-slate-500">Department of AI & DS Candidate</p>
+
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs text-slate-500">Department Candidate</p>
+                        {getMarginBadge(cand)}
+                      </div>
                     </div>
 
-                    {/* Real-time stats display out of 59 voters */}
+                    {/* Real-time stats display out of totalVotersCap */}
                     <div className="space-y-1.5 pt-2">
                       <div className="flex justify-between items-center text-xs font-semibold">
                         <span className="text-slate-500">Live Standing</span>
                         <span className="text-emerald-400 font-mono font-bold">
-                          {cand.votes_count} / {TOTAL_ELIGIBLE_VOTERS} votes ({percentage}%)
+                          {cand.votes_count} / {totalVotersCap} votes ({percentage}%)
                         </span>
                       </div>
                       <div className="h-2.5 w-full bg-slate-950 rounded-full overflow-hidden border border-slate-900">
                         <div 
                           className="h-full bg-gradient-to-r from-emerald-500 to-indigo-500 transition-all duration-500" 
-                          style={{ width: `${Math.min(100, (cand.votes_count / TOTAL_ELIGIBLE_VOTERS) * 100)}%` }}
+                          style={{ width: `${Math.min(100, (cand.votes_count / totalVotersCap) * 100)}%` }}
                         />
                       </div>
                     </div>

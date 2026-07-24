@@ -3,7 +3,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
-import { TOTAL_ELIGIBLE_VOTERS } from '@/lib/validation';
 import { 
   Shield, 
   LogOut, 
@@ -19,7 +18,11 @@ import {
   AlertTriangle,
   XCircle,
   Vote,
-  Layers
+  Layers,
+  Crown,
+  TrendingDown,
+  Trophy,
+  Award
 } from 'lucide-react';
 
 interface Candidate {
@@ -31,6 +34,7 @@ interface Candidate {
 interface Election {
   id: string;
   title: string;
+  total_voters: number;
   is_active: boolean;
   created_at: string;
 }
@@ -58,6 +62,7 @@ export default function AdminDashboard() {
 
   // Create Election Form States
   const [roleTitle, setRoleTitle] = useState('');
+  const [totalVotersInput, setTotalVotersInput] = useState('59');
   const [candidateNameInput, setCandidateNameInput] = useState('');
   const [candidatesList, setCandidatesList] = useState<string[]>([]);
   const [isSubmittingElection, setIsSubmittingElection] = useState(false);
@@ -99,10 +104,12 @@ export default function AdminDashboard() {
 
       if (error) throw error;
 
-      const list = data || [];
+      const list = (data || []).map((e: any) => ({
+        ...e,
+        total_voters: e.total_voters || 59,
+      }));
       setElectionsList(list);
 
-      // Auto-select first election if none selected or selected was deleted
       if (list.length > 0) {
         setSelectedElectionId((prev) => {
           if (prev && list.some((e) => e.id === prev)) {
@@ -121,7 +128,6 @@ export default function AdminDashboard() {
   // Fetch details for currently selected election
   const fetchSelectedElectionData = useCallback(async (electionId: string) => {
     try {
-      // 1. Fetch candidates
       const { data: candidatesData, error: candidatesError } = await supabase
         .from('candidates')
         .select('*')
@@ -131,7 +137,6 @@ export default function AdminDashboard() {
       if (candidatesError) throw candidatesError;
       setCandidates(candidatesData || []);
 
-      // 2. Fetch votes audit log
       const { data: votesData, error: votesError } = await supabase
         .from('votes')
         .select(`
@@ -161,14 +166,12 @@ export default function AdminDashboard() {
     }
   }, []);
 
-  // Initial fetch on admin auth
   useEffect(() => {
     if (isAdmin) {
       fetchElectionsList();
     }
   }, [isAdmin, fetchElectionsList]);
 
-  // Fetch candidate/vote data whenever selected election changes
   useEffect(() => {
     if (selectedElectionId) {
       fetchSelectedElectionData(selectedElectionId);
@@ -178,7 +181,7 @@ export default function AdminDashboard() {
     }
   }, [selectedElectionId, fetchSelectedElectionData]);
 
-  // Realtime subscriptions for live election changes & vote entries
+  // Realtime subscriptions
   useEffect(() => {
     if (!isAdmin) return;
 
@@ -210,7 +213,7 @@ export default function AdminDashboard() {
     };
   }, [isAdmin, selectedElectionId, fetchElectionsList, fetchSelectedElectionData]);
 
-  // Handle adding candidate to form lineup
+  // Form candidate list handlers
   const addCandidateToList = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     const name = candidateNameInput.trim();
@@ -230,7 +233,7 @@ export default function AdminDashboard() {
     setCandidatesList(candidatesList.filter((_, i) => i !== index));
   };
 
-  // Launch new election role
+  // Launch new election role with custom total voters
   const handleCreateElection = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError(null);
@@ -239,6 +242,12 @@ export default function AdminDashboard() {
     const title = roleTitle.trim();
     if (!title) {
       setFormError('Please enter the Title of the Role.');
+      return;
+    }
+
+    const votersLimit = parseInt(totalVotersInput, 10);
+    if (isNaN(votersLimit) || votersLimit < 1) {
+      setFormError('Please enter a valid total eligible voters count (e.g. 59).');
       return;
     }
 
@@ -253,16 +262,17 @@ export default function AdminDashboard() {
       const { data: newElectionId, error } = await supabase.rpc('create_new_election', {
         p_title: title,
         p_candidate_names: candidatesList,
+        p_total_voters: votersLimit,
       });
 
       if (error) throw error;
 
       setFormSuccess(true);
       setRoleTitle('');
+      setTotalVotersInput('59');
       setCandidatesList([]);
       setFormError(null);
       
-      // Refresh list and select newly created election
       await fetchElectionsList();
       if (newElectionId) {
         setSelectedElectionId(newElectionId);
@@ -275,7 +285,7 @@ export default function AdminDashboard() {
     }
   };
 
-  // Cancel / Delete an individual vote record
+  // Cancel / Delete a vote record
   const handleCancelVote = async (voteId: string, voterRegNo: string) => {
     if (!confirm(`Are you sure you want to cancel the vote cast by Register Number ${voterRegNo}? This voter will be unlocked to vote again.`)) {
       return;
@@ -298,7 +308,7 @@ export default function AdminDashboard() {
     }
   };
 
-  // Delete active election
+  // Delete election role
   const handleDeleteElection = async () => {
     if (!selectedElectionId) return;
     const currentElection = electionsList.find((e) => e.id === selectedElectionId);
@@ -331,7 +341,6 @@ export default function AdminDashboard() {
     router.push('/admin/login');
   };
 
-  // 3-way Sorting Toggles
   const handleSortToggle = (field: 'name' | 'reg_no' | 'candidate') => {
     if (sortBy === field) {
       setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
@@ -371,8 +380,44 @@ export default function AdminDashboard() {
   };
 
   const currentSelectedElection = electionsList.find((e) => e.id === selectedElectionId);
+  const totalVotersCap = currentSelectedElection?.total_voters || 59;
   const totalVotes = candidates.reduce((acc, curr) => acc + curr.votes_count, 0);
-  const remainingVoters = Math.max(0, TOTAL_ELIGIBLE_VOTERS - totalVotes);
+  const remainingVoters = Math.max(0, totalVotersCap - totalVotes);
+
+  // Leader / Trailing Margin Formula Calculations
+  const sortedCandidatesByVotes = [...candidates].sort((a, b) => b.votes_count - a.votes_count);
+  const highestVotes = sortedCandidatesByVotes[0]?.votes_count || 0;
+  const secondHighestVotes = sortedCandidatesByVotes[1]?.votes_count || 0;
+  const isCompleted = totalVotes >= totalVotersCap && totalVotersCap > 0;
+  const winnerCandidate = sortedCandidatesByVotes[0];
+
+  const getMarginBadge = (cand: Candidate) => {
+    if (totalVotes === 0) return null;
+
+    if (cand.votes_count === highestVotes && highestVotes > 0) {
+      if (highestVotes === secondHighestVotes) {
+        return (
+          <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 bg-amber-500/10 border border-amber-500/30 text-amber-400 font-bold rounded-full">
+            <Crown className="w-3 h-3 text-amber-400" /> Tied for 1st
+          </span>
+        );
+      }
+      const margin = highestVotes - secondHighestVotes;
+      return (
+        <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 font-bold rounded-full">
+          <Crown className="w-3 h-3 text-emerald-400" /> Leading by {margin} {margin === 1 ? 'vote' : 'votes'}
+        </span>
+      );
+    } else if (highestVotes > 0) {
+      const trailing = highestVotes - cand.votes_count;
+      return (
+        <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 bg-rose-500/10 border border-rose-500/30 text-rose-400 font-semibold rounded-full">
+          <TrendingDown className="w-3 h-3 text-rose-400" /> Trailing by {trailing} {trailing === 1 ? 'vote' : 'votes'}
+        </span>
+      );
+    }
+    return null;
+  };
 
   if (loadingSession) {
     return (
@@ -402,7 +447,7 @@ export default function AdminDashboard() {
                 <span className="text-xs px-2 py-0.5 bg-indigo-500/10 border border-indigo-500/30 text-indigo-400 font-medium rounded">Admin Panel</span>
                 <span className="text-xs text-slate-500">SRM Valliammai Engineering College</span>
               </div>
-              <h1 className="text-lg font-bold text-white">Multi-Role Symposium Voting Console</h1>
+              <h1 className="text-lg font-bold text-white">Multi-Role Symposium Console</h1>
             </div>
           </div>
 
@@ -440,7 +485,7 @@ export default function AdminDashboard() {
               </div>
             )}
 
-            <form onSubmit={handleCreateElection} className="space-y-6">
+            <form onSubmit={handleCreateElection} className="space-y-5">
               <div className="space-y-2">
                 <label className="text-xs font-semibold uppercase tracking-wider text-slate-400">
                   Title of the Role / Post
@@ -452,6 +497,26 @@ export default function AdminDashboard() {
                   onChange={(e) => setRoleTitle(e.target.value)}
                   placeholder="e.g. President, Vice President, Treasurer"
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-white placeholder-slate-700 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all text-sm"
+                />
+              </div>
+
+              {/* Dynamic Total Eligible Voters Input */}
+              <div className="space-y-2">
+                <div className="flex justify-between items-center">
+                  <label className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                    Total Eligible Voters Count
+                  </label>
+                  <span className="text-[10px] text-indigo-400 font-mono">Customizable</span>
+                </div>
+                <input
+                  type="number"
+                  required
+                  min="1"
+                  max="1000"
+                  value={totalVotersInput}
+                  onChange={(e) => setTotalVotersInput(e.target.value)}
+                  placeholder="59"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-white placeholder-slate-700 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all text-sm font-mono"
                 />
               </div>
 
@@ -544,7 +609,7 @@ export default function AdminDashboard() {
 
             {/* Active Election Selection Tabs */}
             {electionsList.length > 0 ? (
-              <div className="space-y-4">
+              <div className="space-y-6">
                 <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-none">
                   <span className="text-xs text-slate-500 font-semibold uppercase shrink-0 flex items-center gap-1">
                     <Layers className="w-3.5 h-3.5" /> Roles:
@@ -573,7 +638,7 @@ export default function AdminDashboard() {
                   <div className="bg-slate-950/80 border border-slate-900 p-4 rounded-xl text-center">
                     <span className="text-[10px] text-slate-500 font-semibold uppercase block">Total Voters</span>
                     <span className="text-xl md:text-2xl font-bold text-white mt-1 block">
-                      {TOTAL_ELIGIBLE_VOTERS}
+                      {totalVotersCap}
                     </span>
                   </div>
                   <div className="bg-slate-950/80 border border-slate-900 p-4 rounded-xl text-center">
@@ -590,7 +655,41 @@ export default function AdminDashboard() {
                   </div>
                 </div>
 
-                {/* Candidate Vote counts with progress bar */}
+                {/* Winner & Official Rankings Banner when Completed */}
+                {isCompleted && winnerCandidate && (
+                  <div className="p-5 bg-gradient-to-r from-amber-500/10 via-amber-500/5 to-slate-900 border border-amber-500/30 rounded-2xl space-y-4 shadow-[0_0_30px_-5px_rgba(245,158,11,0.15)]">
+                    <div className="flex items-center gap-3">
+                      <div className="bg-amber-500/20 p-2.5 rounded-xl text-amber-400">
+                        <Trophy className="w-6 h-6" />
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-amber-400 font-bold uppercase tracking-wider block">Official Election Winner</span>
+                        <h3 className="text-xl font-extrabold text-white">🏆 {winnerCandidate.name}</h3>
+                      </div>
+                      <span className="ml-auto text-xs px-3 py-1 bg-amber-500/20 border border-amber-500/40 text-amber-300 font-bold rounded-full">
+                        {winnerCandidate.votes_count} / {totalVotersCap} votes
+                      </span>
+                    </div>
+
+                    <div className="pt-2 border-t border-amber-500/20 space-y-2">
+                      <span className="text-[10px] text-slate-400 uppercase font-semibold block">Final Standings & Rankings</span>
+                      <div className="grid gap-2">
+                        {sortedCandidatesByVotes.map((cand, rankIdx) => {
+                          const medal = rankIdx === 0 ? '🥇 1st Place' : rankIdx === 1 ? '🥈 2nd Place' : rankIdx === 2 ? '🥉 3rd Place' : `${rankIdx + 1}th Place`;
+                          const pct = Number(((cand.votes_count / totalVotersCap) * 100).toFixed(1));
+                          return (
+                            <div key={cand.id} className="flex justify-between items-center bg-slate-950/80 px-3 py-2 rounded-lg border border-slate-900 text-xs">
+                              <span className="font-bold text-amber-400">{medal}: <span className="text-white font-semibold">{cand.name}</span></span>
+                              <span className="font-mono text-slate-300">{cand.votes_count} / {totalVotersCap} ({pct}%)</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Candidate Vote counts with real-time leading/trailing badges */}
                 <div className="space-y-4 pt-2">
                   <div className="flex justify-between items-center">
                     <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
@@ -600,21 +699,25 @@ export default function AdminDashboard() {
                       Live
                     </span>
                   </div>
+
                   <div className="space-y-4 max-h-[300px] overflow-y-auto pr-1">
                     {candidates.map((cand) => {
-                      const percentage = totalVotes > 0 ? Math.round((cand.votes_count / totalVotes) * 100) : 0;
+                      const percentage = Number(((cand.votes_count / totalVotersCap) * 100).toFixed(1));
                       return (
-                        <div key={cand.id} className="space-y-1 bg-slate-950/40 p-3 rounded-xl border border-slate-900">
+                        <div key={cand.id} className="space-y-2 bg-slate-950/40 p-3.5 rounded-xl border border-slate-900">
                           <div className="flex justify-between items-center text-sm">
-                            <span className="font-semibold text-slate-200">{cand.name}</span>
-                            <span className="font-bold text-emerald-400">
-                              {cand.votes_count} {cand.votes_count === 1 ? 'vote' : 'votes'} ({percentage}%)
+                            <div className="flex items-center gap-2">
+                              <span className="font-semibold text-slate-200">{cand.name}</span>
+                              {getMarginBadge(cand)}
+                            </div>
+                            <span className="font-bold text-emerald-400 font-mono">
+                              {cand.votes_count} / {totalVotersCap} ({percentage}%)
                             </span>
                           </div>
-                          <div className="h-2.5 w-full bg-slate-900 rounded-full overflow-hidden">
+                          <div className="h-2.5 w-full bg-slate-900 rounded-full overflow-hidden border border-slate-900">
                             <div 
                               className="h-full bg-gradient-to-r from-emerald-500 to-indigo-500 transition-all duration-500 ease-out rounded-full" 
-                              style={{ width: `${percentage}%` }}
+                              style={{ width: `${Math.min(100, (cand.votes_count / totalVotersCap) * 100)}%` }}
                             />
                           </div>
                         </div>
@@ -628,14 +731,14 @@ export default function AdminDashboard() {
                 <BarChart3 className="w-12 h-12 text-slate-700" />
                 <h3 className="text-slate-400 font-semibold">No Active Role Elections</h3>
                 <p className="text-xs text-slate-600 max-w-sm">
-                  Use the form on the left to add your first role election. You can create multiple concurrent elections.
+                  Use the form on the left to add your first role election. You can create multiple concurrent elections with customizable total voter limits.
                 </p>
               </div>
             )}
           </section>
         </div>
 
-        {/* Exclusive Voter Audit Log Section with 3-Way Sorting */}
+        {/* Exclusive Voter Audit Log Section */}
         <section className="bg-slate-900/40 border border-slate-900 rounded-2xl p-6 backdrop-blur-sm space-y-6">
           <div className="flex flex-col md:flex-row md:items-center justify-between border-b border-slate-800/60 pb-4 gap-4">
             <div className="flex items-center gap-2">
@@ -648,7 +751,6 @@ export default function AdminDashboard() {
               </div>
             </div>
 
-            {/* 3-Way Sorting Toggles: Voter Name, Reg No, Voted Candidate */}
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-xs text-slate-400 font-semibold uppercase">Sort By:</span>
               <div className="inline-flex rounded-lg border border-slate-800 p-0.5 bg-slate-950">
