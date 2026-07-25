@@ -32,6 +32,8 @@ import {
   X
 } from 'lucide-react';
 
+import Link from 'next/link';
+
 interface Candidate {
   id: string;
   name: string;
@@ -609,12 +611,20 @@ export default function AdminDashboard() {
             </div>
           </div>
 
-          <button
-            onClick={handleSignOut}
-            className="flex items-center gap-2 px-4 py-2 bg-slate-900 border border-slate-800 hover:bg-slate-800 hover:border-red-500/30 hover:text-red-400 rounded-xl text-sm font-semibold transition-all duration-300"
-          >
-            <LogOut className="w-4 h-4" /> Sign Out
-          </button>
+          <div className="flex items-center gap-3">
+            <Link
+              href="/admin/settings"
+              className="flex items-center gap-2 px-4 py-2 bg-emerald-500/10 border border-emerald-500/30 hover:bg-emerald-500/20 text-emerald-400 rounded-xl text-sm font-semibold transition-all duration-300 shadow-[0_0_15px_-3px_rgba(16,185,129,0.15)]"
+            >
+              <Settings className="w-4 h-4" /> Voter Settings
+            </Link>
+            <button
+              onClick={handleSignOut}
+              className="flex items-center gap-2 px-4 py-2 bg-slate-900 border border-slate-800 hover:bg-slate-800 hover:border-red-500/30 hover:text-red-400 rounded-xl text-sm font-semibold transition-all duration-300"
+            >
+              <LogOut className="w-4 h-4" /> Sign Out
+            </button>
+          </div>
         </div>
       </header>
 
