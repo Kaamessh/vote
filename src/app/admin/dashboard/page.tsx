@@ -23,7 +23,9 @@ import {
   TrendingDown,
   Trophy,
   Settings,
-  Clock
+  Clock,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -38,6 +40,7 @@ interface Election {
   title: string;
   total_voters: number;
   is_active: boolean;
+  is_hidden?: boolean;
   created_at: string;
 }
 
@@ -65,7 +68,7 @@ export default function AdminDashboard() {
 
   // Create Election Form States
   const [roleTitle, setRoleTitle] = useState('');
-  const [totalVotersInput, setTotalVotersInput] = useState('59');
+  const [totalVotersInput, setTotalVotersInput] = useState('122');
   const [candidateNameInput, setCandidateNameInput] = useState('');
   const [candidatesList, setCandidatesList] = useState<string[]>([]);
   const [isSubmittingElection, setIsSubmittingElection] = useState(false);
@@ -79,8 +82,9 @@ export default function AdminDashboard() {
   // Cancel vote state
   const [cancellingVoteId, setCancellingVoteId] = useState<string | null>(null);
   
-  // Delete election state
+  // Delete election & visibility toggle state
   const [isDeletingElection, setIsDeletingElection] = useState(false);
+  const [isTogglingVisibility, setIsTogglingVisibility] = useState(false);
 
   // Verify Admin Session
   useEffect(() => {
@@ -109,7 +113,8 @@ export default function AdminDashboard() {
 
       const list = (data || []).map((e: any) => ({
         ...e,
-        total_voters: e.total_voters || 59,
+        total_voters: e.total_voters || 122,
+        is_hidden: !!e.is_hidden,
       }));
       setElectionsList(list);
 
@@ -272,7 +277,7 @@ export default function AdminDashboard() {
 
       setFormSuccess(true);
       setRoleTitle('');
-      setTotalVotersInput('59');
+      setTotalVotersInput('122');
       setCandidatesList([]);
       setFormError(null);
       
@@ -285,6 +290,25 @@ export default function AdminDashboard() {
       setFormError(err.message || 'Failed to create election. Please try again.');
     } finally {
       setIsSubmittingElection(false);
+    }
+  };
+
+  // Toggle election visibility (Hide / Show from voters)
+  const handleToggleElectionVisibility = async (electionId: string, currentHidden: boolean) => {
+    setIsTogglingVisibility(true);
+    try {
+      const { error } = await supabase
+        .from('elections')
+        .update({ is_hidden: !currentHidden })
+        .eq('id', electionId);
+
+      if (error) throw error;
+      await fetchElectionsList();
+    } catch (err: any) {
+      console.error('Error toggling election visibility:', err);
+      alert('Failed to update election visibility: ' + err.message);
+    } finally {
+      setIsTogglingVisibility(false);
     }
   };
 
@@ -658,15 +682,41 @@ export default function AdminDashboard() {
                 <h2 className="text-lg font-bold text-white">Live Role Analytics</h2>
               </div>
 
-              {selectedElectionId && (
-                <button
-                  onClick={handleDeleteElection}
-                  disabled={isDeletingElection}
-                  className="flex items-center gap-1.5 text-xs text-red-400 hover:text-white bg-red-500/10 hover:bg-red-600 border border-red-500/30 px-3 py-1.5 rounded-lg font-medium transition-all self-start sm:self-auto"
-                >
-                  {isDeletingElection ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
-                  Delete Selected Role
-                </button>
+              {selectedElectionId && currentSelectedElection && (
+                <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
+                  <button
+                    onClick={() => handleToggleElectionVisibility(selectedElectionId, !!currentSelectedElection.is_hidden)}
+                    disabled={isTogglingVisibility}
+                    className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg font-medium transition-all border ${
+                      currentSelectedElection.is_hidden
+                        ? 'bg-amber-500/10 border-amber-500/30 text-amber-400 hover:bg-amber-500/20'
+                        : 'bg-indigo-500/10 border-indigo-500/30 text-indigo-400 hover:bg-indigo-500/20'
+                    }`}
+                    title={currentSelectedElection.is_hidden ? "Click to make visible to voters" : "Click to hide from voters"}
+                  >
+                    {isTogglingVisibility ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : currentSelectedElection.is_hidden ? (
+                      <>
+                        <EyeOff className="w-3.5 h-3.5 text-amber-400" />
+                        <span>Hidden from Voters</span>
+                      </>
+                    ) : (
+                      <>
+                        <Eye className="w-3.5 h-3.5 text-indigo-400" />
+                        <span>Visible to Voters</span>
+                      </>
+                    )}
+                  </button>
+                  <button
+                    onClick={handleDeleteElection}
+                    disabled={isDeletingElection}
+                    className="flex items-center gap-1.5 text-xs text-red-400 hover:text-white bg-red-500/10 hover:bg-red-600 border border-red-500/30 px-3 py-1.5 rounded-lg font-medium transition-all"
+                  >
+                    {isDeletingElection ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+                    Delete Selected Role
+                  </button>
+                </div>
               )}
             </div>
 
@@ -689,8 +739,17 @@ export default function AdminDashboard() {
                             : 'bg-slate-950 border border-slate-800 text-slate-400 hover:text-white'
                         }`}
                       >
-                        <Vote className="w-3.5 h-3.5" />
+                        {election.is_hidden ? (
+                          <EyeOff className="w-3.5 h-3.5 text-amber-400" />
+                        ) : (
+                          <Vote className="w-3.5 h-3.5" />
+                        )}
                         {election.title}
+                        {election.is_hidden && (
+                          <span className="text-[9px] bg-amber-500/20 text-amber-300 border border-amber-500/30 px-1.5 py-0.5 rounded font-mono uppercase">
+                            Hidden
+                          </span>
+                        )}
                       </button>
                     );
                   })}
