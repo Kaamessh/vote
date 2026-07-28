@@ -68,7 +68,7 @@ export default function AdminDashboard() {
 
   // Create Election Form States
   const [roleTitle, setRoleTitle] = useState('');
-  const [totalVotersInput, setTotalVotersInput] = useState('122');
+  const [totalVotersInput, setTotalVotersInput] = useState('123');
   const [candidateNameInput, setCandidateNameInput] = useState('');
   const [candidatesList, setCandidatesList] = useState<string[]>([]);
   const [isSubmittingElection, setIsSubmittingElection] = useState(false);
@@ -113,7 +113,7 @@ export default function AdminDashboard() {
 
       const list = (data || []).map((e: any) => ({
         ...e,
-        total_voters: e.total_voters || 122,
+        total_voters: e.total_voters || 123,
         is_hidden: !!e.is_hidden,
       }));
       setElectionsList(list);
@@ -277,7 +277,7 @@ export default function AdminDashboard() {
 
       setFormSuccess(true);
       setRoleTitle('');
-      setTotalVotersInput('122');
+      setTotalVotersInput('123');
       setCandidatesList([]);
       setFormError(null);
       
